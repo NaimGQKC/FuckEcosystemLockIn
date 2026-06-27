@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 
 from . import faq
 from .reservation import (
+    Availability,
     Booking,
     ModificationRestrictedError,
     ReservationError,
@@ -58,11 +59,24 @@ class Concierge:
         self.messages: list[Message] = []
 
     # -- availability ------------------------------------------------------
-    async def check_availability(self, *, date: str, party_size: int) -> str:
+    async def check_availability(
+        self, *, date: str, party_size: int, part_of_day: str = ""
+    ) -> str:
         try:
             availability = await self.service.check_availability(date, party_size)
         except ReservationError as exc:
             return exc.spoken_message
+
+        slots = list(availability.slots)
+        want = part_of_day.strip().lower()
+        if want in ("lunch", "dinner"):
+            filtered = [s for s in slots if s.experience_name.lower() == want]
+            # Only narrow if it leaves something; otherwise fall back to all.
+            if filtered:
+                slots = filtered
+        availability = Availability(
+            date=availability.date, party_size=availability.party_size, slots=slots
+        )
 
         if not availability.is_available:
             return (
@@ -82,14 +96,14 @@ class Concierge:
         else:
             listed = shown[0]
         more = ""
-        pay = any(s.payment_required for s in availability.slots)
-        pay_note = (
-            " Some seatings, like the tasting menu, may need a card to hold the table."
-            if pay else ""
+        merged = any(s.is_merged for s in availability.slots)
+        merge_note = (
+            f" For a party of {party_size} we'd set up a combined table."
+            if merged else ""
         )
         return (
-            f"For {party_size}, I have {listed}{more}. "
-            f"Which time would you like?{pay_note}"
+            f"For {party_size}, I have {listed}{more}.{merge_note} "
+            "Which time would you like?"
         )
 
     # -- booking -----------------------------------------------------------
@@ -118,11 +132,13 @@ class Concierge:
         except ReservationError as exc:
             return exc.spoken_message
 
-        confirm = (
-            f"You're all set — {_booking_summary(booking, locale=self.locale)}, "
-            f"under {first_name}. Is there anything else I can help with?"
+        combined = (
+            " We'll combine a couple of tables for your group." if booking.is_merged else ""
         )
-        return confirm
+        return (
+            f"You're all set — {_booking_summary(booking, locale=self.locale)}, "
+            f"under {first_name}.{combined} Is there anything else I can help with?"
+        )
 
     # -- lookup ------------------------------------------------------------
     async def lookup_reservations(self, *, phone: str) -> str:

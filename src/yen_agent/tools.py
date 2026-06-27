@@ -20,15 +20,22 @@ class ReservationAgent(Agent):
         self.concierge = concierge
 
     @function_tool
-    async def check_availability(self, date: str, party_size: int) -> str:
+    async def check_availability(
+        self, date: str, party_size: int, part_of_day: str = ""
+    ) -> str:
         """Check open reservation times at Yen.
 
         Args:
             date: The date to check, as YYYY-MM-DD. Resolve relative dates
                 (e.g. "this Friday") to an absolute date before calling.
             party_size: Number of guests.
+            part_of_day: Optional — "lunch" or "dinner" to narrow results when the
+                caller asks about a specific service (e.g. "this evening" -> "dinner").
+                Leave empty to see all seatings that day.
         """
-        return await self.concierge.check_availability(date=date, party_size=party_size)
+        return await self.concierge.check_availability(
+            date=date, party_size=party_size, part_of_day=part_of_day
+        )
 
     @function_tool
     async def book_reservation(

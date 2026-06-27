@@ -70,12 +70,35 @@ async def test_lookup_and_cancel_by_phone():
         await c.service.aclose()
 
 
-async def test_party_size_error_is_spoken_gracefully():
+async def test_large_party_is_spoken_as_escalation():
     c = await make_concierge()
     try:
         msg = await c.check_availability(date=future_date(), party_size=40)
-        # Should surface the friendly out-of-range message, not raise.
-        assert "larger group" in msg.lower() or "message" in msg.lower()
+        # Should surface the friendly "we'll arrange with the team" message, not raise.
+        assert "team" in msg.lower() and "raise" not in msg.lower()
+        assert "name" in msg.lower() or "message" in msg.lower()
+    finally:
+        await c.service.aclose()
+
+
+async def test_merge_is_mentioned_for_large_party():
+    c = await make_concierge()
+    try:
+        msg = await c.check_availability(date=future_date(), party_size=8)
+        assert "combined table" in msg.lower()
+    finally:
+        await c.service.aclose()
+
+
+async def test_booking_merged_table_is_announced():
+    c = await make_concierge()
+    try:
+        date = future_date()
+        msg = await c.book_reservation(
+            time=slot_time(date, "19:00"), party_size=8,
+            first_name="Group", phone="+15145552000",
+        )
+        assert "combine" in msg.lower()
     finally:
         await c.service.aclose()
 
@@ -83,7 +106,7 @@ async def test_party_size_error_is_spoken_gracefully():
 async def test_faq_known_and_unknown():
     c = await make_concierge()
     try:
-        assert "open" in c.answer_faq(topic="hours").lower()
+        assert "lunch" in c.answer_faq(topic="hours").lower()
         assert "message" in c.answer_faq(topic="does_not_exist").lower()
     finally:
         await c.service.aclose()

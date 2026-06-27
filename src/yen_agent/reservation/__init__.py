@@ -9,6 +9,7 @@ dependency-injection change.
 from .base import ReservationService
 from .errors import (
     BookingNotFoundError,
+    LargePartyError,
     ModificationRestrictedError,
     NotCancelableError,
     PartySizeOutOfRangeError,
@@ -27,6 +28,7 @@ __all__ = [
     "ReservationError",
     "SlotUnavailableError",
     "PartySizeOutOfRangeError",
+    "LargePartyError",
     "NotCancelableError",
     "ModificationRestrictedError",
     "BookingNotFoundError",

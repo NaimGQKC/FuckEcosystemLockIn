@@ -90,6 +90,9 @@ class JsonApiReservationService(ReservationService):
             note=attrs.get("note", "") or "",
             locale=attrs.get("locale", "en") or "en",
             modification_restricted=bool(attrs.get("modification-restricted", False)),
+            tables=tuple(attrs.get("tables", []) or []),
+            arrangement=attrs.get("arrangement", "single"),
+            duration_min=int(attrs.get("duration-min", 0) or 0),
         )
 
     @staticmethod
@@ -120,6 +123,9 @@ class JsonApiReservationService(ReservationService):
                 experience_id=(s.get("experience") or {}).get("id", ""),
                 experience_name=(s.get("experience") or {}).get("name", ""),
                 payment_required=bool(s.get("payment-required", False)),
+                arrangement=s.get("arrangement", "single"),
+                tables=tuple(s.get("tables", []) or []),
+                seats=int(s.get("seats", 0) or 0),
             )
             for s in raw_slots
         ]

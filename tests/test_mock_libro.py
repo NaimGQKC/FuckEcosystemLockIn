@@ -18,7 +18,7 @@ def test_restaurants_jsonapi_shape():
     assert r.headers["content-type"].startswith(CONTENT_TYPE)
     data = r.json()["data"]
     assert data[0]["type"] == "restaurant"
-    assert data[0]["attributes"]["name"] == "Yen"
+    assert data[0]["attributes"]["name"] == "YEN Cuisine Japonaise"
 
 
 def test_seatings_returns_date_keyed_slots():
@@ -33,10 +33,24 @@ def test_seatings_returns_date_keyed_slots():
     assert {"id", "name"} <= set(slot["experience"])
 
 
-def test_seatings_rejects_bad_party_size_with_2005():
-    r = client().get("/restricted/restaurant/seatings", params={"date": future_date(), "size": 99})
+def test_seatings_rejects_zero_party_size_with_2005():
+    r = client().get("/restricted/restaurant/seatings", params={"date": future_date(), "size": 0})
     assert r.status_code == 422
     assert r.json()["errors"][0]["code"] == "2005"
+
+
+def test_seatings_large_party_returns_2006():
+    r = client().get("/restricted/restaurant/seatings", params={"date": future_date(), "size": 30})
+    assert r.status_code == 422
+    assert r.json()["errors"][0]["code"] == "2006"
+
+
+def test_seatings_slot_exposes_arrangement():
+    date = future_date()
+    r = client().get("/restricted/restaurant/seatings", params={"date": date, "size": 8})
+    slot = r.json()["data"]["attributes"]["slots"][date][0]
+    assert slot["arrangement"] in ("single", "merged")
+    assert slot["seats"] >= 8
 
 
 def test_create_booking_returns_201_and_relationships():

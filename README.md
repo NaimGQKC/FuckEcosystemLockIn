@@ -1,9 +1,14 @@
-# Yen — bilingual voice AI phone agent (POC)
+# YEN Cuisine Japonaise — bilingual voice AI phone agent (POC)
 
-A low-cost, fast-to-ship voice agent that answers Yen Restaurant's (Montreal)
-phone and handles reservations — check availability, book, look up, reschedule,
-cancel, answer FAQs, and take messages — in **English first, French via one
-config switch**.
+A low-cost, fast-to-ship voice agent that answers the phone for **YEN Cuisine
+Japonaise** (2157 Rue Mackay, downtown Montreal) and handles reservations —
+check availability, book, look up, reschedule, cancel, answer FAQs, and take
+messages — in **English first, French via one config switch**.
+
+It doesn't just read a calendar: it reasons about the actual **floor plan** —
+picking the right table, **combining tables** for larger parties, respecting how
+long a table is held, and **escalating oversized parties to staff** — by calling
+a deterministic seating engine rather than guessing.
 
 This repository is **Phase 1**: a $0, web-testable agent built on
 [LiveKit Agents](https://docs.livekit.io/agents/), wired to a **mock Libro
@@ -58,18 +63,74 @@ python -m mock_libro --port 8000       # serves the Libro-shaped JSON:API
 curl "http://localhost:8000/restricted/restaurant/seatings?date=2026-07-20&size=2"
 ```
 
-### 3. Run the voice agent
+### 3. See the reasoning without any keys (text demo)
+
+```bash
+python scripts/demo.py
+```
+
+This drives the agent's brain through a real script — books a 2-top, combines
+tables for a party of 8, refuses a second party of 8 when the room is full, and
+escalates a party of 14 to staff — printing exactly what it would say.
+
+### 4. Run the actual voice agent
+
+See **[Run it for real](#run-it-for-real-with-your-own-keys)** below for the
+full key-by-key setup. The short version:
 
 ```bash
 pip install -e ".[agent]"              # installs livekit-agents + plugins
 cp .env.example .env                   # fill in LiveKit + Deepgram + LLM keys
-python agent.py console                # local terminal audio, no server needed
-# or:
-python agent.py dev                    # connect to LiveKit Cloud, test in the browser Agent Console
+python agent.py console                # talk to it in your terminal, no server/phone needed
 ```
 
 The agent defaults to the in-process mock reservation backend, so it works the
 moment your STT/LLM/TTS keys are set — no Libro access required.
+
+## Run it for real (with your own keys)
+
+To actually **hear and talk to it**, you need three free accounts. None require
+a phone number for the first test; all have free tiers.
+
+| # | Account | Free tier | What you copy into `.env` |
+|---|---|---|---|
+| 1 | [LiveKit Cloud](https://cloud.livekit.io) | Build tier, no card | `LIVEKIT_URL`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET` |
+| 2 | [Deepgram](https://console.deepgram.com) | $200 credit, no card | `DEEPGRAM_API_KEY` (used for both STT and TTS) |
+| 3 | [Google AI Studio](https://aistudio.google.com/apikey) (Gemini) | free tier | `GOOGLE_API_KEY` |
+
+(Prefer OpenAI for the LLM? set `YEN_LLM_PROVIDER=openai` and `OPENAI_API_KEY` instead.)
+
+**Step by step:**
+
+1. `pip install -e ".[agent]"` — installs `livekit-agents` and the Deepgram /
+   Google / Silero / turn-detector plugins. (First run downloads a small
+   turn-detection model.)
+2. `cp .env.example .env`, then paste in the three keys above.
+3. **Talk to it locally — no phone, no server:**
+   ```bash
+   python agent.py console
+   ```
+   Speak into your mic; you'll hear the agent answer. Try: *"Do you have a table
+   for two on Saturday evening?"* → *"Make it a party of eight"* → *"Actually
+   we're fourteen."*
+4. **Test in the browser** (shows the agent as it would behave deployed):
+   ```bash
+   python agent.py dev
+   ```
+   Then open your project's **Agent Console** in the LiveKit Cloud dashboard and
+   click connect. This uses free WebRTC minutes, not telephony.
+5. **Add a real phone number (Phase 2, optional):** buy a Twilio Canadian local
+   number, create an Elastic SIP trunk, and point an inbound LiveKit SIP trunk +
+   dispatch rule at the agent. No agent code changes — a phone caller is just
+   another participant. (Costs ~$1/mo for the number + per-minute usage.)
+
+**Enable French** any time: set `YEN_LANGUAGE_MODE=multi` and
+`YEN_TTS_PROVIDER=cartesia` (+ `CARTESIA_API_KEY`).
+
+> **Model-name note:** the plugin model ids in `src/yen_agent/agent.py`
+> (Nova-3, `gemini-2.5-flash-lite`, `aura-2-thalia-en`, `sonic-2`) are the
+> recommended stack; if a plugin version rejects one, check the provider's
+> current model list and adjust that one line.
 
 ## Recommended low-cost stack
 
@@ -91,6 +152,31 @@ YEN_TTS_PROVIDER=cartesia    # Sonic for native French TTS
 ```
 
 No architecture change — the agent detects the caller's language and responds in kind.
+
+## How the agent reasons about tables
+
+The hard part of restaurant reservations isn't the calendar — it's the **room**.
+All of that lives in `mock_libro/floorplan.py` as a deterministic engine (an LLM
+should never do table math), and the agent reasons by *calling* it:
+
+- **Floor plan:** YEN is modeled as an intimate room — a few 2-tops and 4-tops,
+  one 6-top, and a sushi counter (placeholder inventory; confirm with the
+  restaurant). Tables belong to **combinable groups** that can be pushed together.
+- **Least-waste assignment:** for each request the engine picks the smallest
+  single table that fits; if none fits, it **merges** the smallest set of tables
+  in one group. A party of 8 becomes two combined 4-tops; the agent says so.
+- **Turn time:** a booking holds its table(s) for the full sitting (lunch 75 min,
+  dinner 105 min), so a 7 PM booking blocks *overlapping* times — not just the
+  exact slot. A time can be open for two and full for eight.
+- **Large-party escalation:** parties beyond what any arrangement can seat
+  (currently 8) return a "needs staff" result; the agent stops trying to book and
+  takes a message instead.
+- **Hours & closed days:** lunch is offered Mon–Sat, dinner daily, each only up to
+  a last-seating time — encoded as services, so the agent never offers a slot when
+  the kitchen is closed.
+
+`python scripts/demo.py` walks through all of these out loud. The same logic is
+covered by `tests/test_floorplan.py` and `tests/test_reservation_service.py`.
 
 ## Phased plan
 
@@ -126,7 +212,8 @@ TTS is the largest and most variable cost (it scales with how much the agent
 ```
 mock_libro/            # the "external" Libro service: FastAPI + SQLite JSON:API mock
   app.py               #   endpoints + JSON:API serializers + error codes
-  db.py                #   SQLite store, Yen seed data, seating/availability rules
+  db.py                #   SQLite store, Yen seed data, table occupancy queries
+  floorplan.py         #   tables, combinable groups, turn times, hours, assignment engine
 src/yen_agent/
   reservation/         # the swap point
     base.py            #   ReservationService ABC  ← tools depend only on this
@@ -140,7 +227,9 @@ src/yen_agent/
   agent.py             # AgentSession wiring + entrypoint
   prompts.py / faq.py  # system prompt + Yen FAQ knowledge base
   config.py            # env-driven settings
-tests/                 # 24 tests, run with no cloud services
+  config.py            # env-driven settings
+scripts/demo.py        # text-mode walkthrough of the reservation reasoning
+tests/                 # 40 tests, run with no cloud services
 docs/LIBRO_CONTRACT.md # the JSON:API subset the mock mirrors + caveats
 ```
 
@@ -149,5 +238,7 @@ docs/LIBRO_CONTRACT.md # the JSON:API subset the mock mirrors + caveats
 The agent tells callers it's an AI assistant and always offers a path to a human
 or to leave a message — good practice, and required in some jurisdictions.
 
-> The FAQ facts (hours, address, menu) in `src/yen_agent/faq.py` are **placeholders
-> for the demo** — replace with Yen's real details before any live use.
+> The hours/address/menu in `src/yen_agent/faq.py` are drawn from public listings
+> (the restaurant's site, OpenTable, Yelp, Tourisme Montréal). Third-party sources
+> disagree slightly on exact hours, and the **table inventory in `floorplan.py` is
+> a realistic placeholder** — confirm both with the restaurant before live use.

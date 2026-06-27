@@ -13,13 +13,25 @@ from dataclasses import dataclass, field
 
 @dataclass(frozen=True)
 class TimeSlot:
-    """A single bookable seating returned by the availability lookup."""
+    """A single bookable seating returned by the availability lookup.
+
+    ``arrangement`` and ``tables`` reflect how the room would seat this party at
+    this time — a single table or a combined ("merged") one — so the agent can
+    explain it to the caller.
+    """
 
     time: str  # ISO-8601 datetime, e.g. "2026-06-28T18:00:00-04:00"
     label: str  # human label, e.g. "6:00 PM"
     experience_id: str
     experience_name: str
     payment_required: bool = False
+    arrangement: str = "single"  # "single" | "merged"
+    tables: tuple[str, ...] = ()
+    seats: int = 0
+
+    @property
+    def is_merged(self) -> bool:
+        return self.arrangement == "merged"
 
 
 @dataclass(frozen=True)
@@ -59,10 +71,17 @@ class Booking:
     note: str = ""
     locale: str = "en"
     modification_restricted: bool = False
+    tables: tuple[str, ...] = ()
+    arrangement: str = "single"  # "single" | "merged"
+    duration_min: int = 0
 
     @property
     def is_cancelled(self) -> bool:
         return self.status.lower() in ("cancelled", "canceled")
+
+    @property
+    def is_merged(self) -> bool:
+        return self.arrangement == "merged" or len(self.tables) > 1
 
 
 @dataclass(frozen=True)

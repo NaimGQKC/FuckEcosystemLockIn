@@ -54,6 +54,16 @@ class PartySizeOutOfRangeError(ReservationError):
     )
 
 
+class LargePartyError(ReservationError):
+    """Party exceeds what the room can seat in any arrangement -> needs staff."""
+
+    code = "2006"
+    spoken_message = (
+        "For a party that size we arrange the seating with our team directly. "
+        "Let me take your name and number and they'll call you right back."
+    )
+
+
 class NotCancelableError(ReservationError):
     code = "4001"
     spoken_message = (
@@ -84,6 +94,7 @@ _CODE_REGISTRY: dict[str, type[ReservationError]] = {
     for cls in (
         SlotUnavailableError,
         PartySizeOutOfRangeError,
+        LargePartyError,
         NotCancelableError,
         BookingNotFoundError,
     )

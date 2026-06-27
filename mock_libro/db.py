@@ -1,39 +1,24 @@
-"""SQLite storage and seed data for the mock Libro service."""
+"""SQLite storage and seed data for the mock Libro service.
+
+Table inventory and service hours live in ``floorplan.py``; this module persists
+restaurants, experiences, people, and bookings (including each booking's assigned
+table ids and turn duration), and answers occupancy queries.
+"""
 
 from __future__ import annotations
 
-import datetime as dt
 import sqlite3
 import threading
 import uuid
 from pathlib import Path
 
-# Montreal is America/Toronto; fixed at EDT (-04:00) for the mock's purposes.
-TZ_OFFSET = "-04:00"
+from . import floorplan
 
-# Seeded identifiers (kept stable so the agent config and tests can rely on them).
 RESTAURANT_ID = "rest_yen_mtl"
-EXP_DINNER = "exp_dinner_yen"
-EXP_LUNCH = "exp_lunch_yen"
-EXP_TASTING = "exp_tasting_yen"
 
-# Per-slot seat capacity used by the availability calculation.
-SLOT_CAPACITY = 24
-# Online party-size limit (outside this range -> Libro code 2005).
-MIN_PARTY_SIZE = 1
-MAX_PARTY_SIZE = 12
-
-# (experience_id, name, [HH:MM slots], payment_required)
-_SEATING_PLAN = [
-    (EXP_LUNCH, "Lunch", ["11:30", "12:00", "12:30", "13:00", "13:30", "14:00"], False),
-    (
-        EXP_DINNER,
-        "Dinner",
-        ["17:00", "17:30", "18:00", "18:30", "19:00", "19:30", "20:00", "20:30", "21:00"],
-        False,
-    ),
-    (EXP_TASTING, "Tasting Menu", ["18:00", "20:00"], True),
-]
+# Re-export party limits (defined by the physical room in floorplan.py).
+MIN_PARTY_SIZE = floorplan.MIN_PARTY_SIZE
+MAX_ONLINE_PARTY = floorplan.MAX_ONLINE_PARTY
 
 
 def _gen_id(prefix: str) -> str:
@@ -41,11 +26,7 @@ def _gen_id(prefix: str) -> str:
 
 
 class Database:
-    """Thin synchronous SQLite wrapper, guarded by a lock for thread-safety.
-
-    A mock service has trivial concurrency needs, so a single connection plus a
-    lock is simpler and safer than a pool.
-    """
+    """Thin synchronous SQLite wrapper, guarded by a lock for thread-safety."""
 
     def __init__(self, path: str = ":memory:", *, seed: bool = True):
         self.path = path
@@ -76,8 +57,7 @@ class Database:
                 CREATE TABLE IF NOT EXISTS experiences (
                     id TEXT PRIMARY KEY,
                     restaurant_id TEXT NOT NULL,
-                    name TEXT NOT NULL,
-                    payment_required INTEGER NOT NULL DEFAULT 0
+                    name TEXT NOT NULL
                 );
                 CREATE TABLE IF NOT EXISTS people (
                     id TEXT PRIMARY KEY,
@@ -94,6 +74,8 @@ class Database:
                     size INTEGER NOT NULL,
                     status TEXT NOT NULL DEFAULT 'confirmed',
                     time TEXT NOT NULL,
+                    duration_min INTEGER NOT NULL DEFAULT 105,
+                    table_ids TEXT DEFAULT '',
                     note TEXT DEFAULT '',
                     locale TEXT DEFAULT 'en',
                     modification_restricted INTEGER NOT NULL DEFAULT 0
@@ -104,18 +86,16 @@ class Database:
 
     def seed(self) -> None:
         with self._lock:
-            cur = self._conn.execute("SELECT COUNT(*) AS n FROM restaurants")
-            if cur.fetchone()["n"]:
+            if self._conn.execute("SELECT COUNT(*) AS n FROM restaurants").fetchone()["n"]:
                 return
             self._conn.execute(
                 "INSERT INTO restaurants (id, name, locality, timezone) VALUES (?,?,?,?)",
-                (RESTAURANT_ID, "Yen", "Montreal", "America/Toronto"),
+                (RESTAURANT_ID, "YEN Cuisine Japonaise", "Montreal", "America/Toronto"),
             )
-            for exp_id, name, _slots, pay in _SEATING_PLAN:
+            for exp_id, name in floorplan.EXPERIENCES.items():
                 self._conn.execute(
-                    "INSERT INTO experiences (id, restaurant_id, name, payment_required)"
-                    " VALUES (?,?,?,?)",
-                    (exp_id, RESTAURANT_ID, name, 1 if pay else 0),
+                    "INSERT INTO experiences (id, restaurant_id, name) VALUES (?,?,?)",
+                    (exp_id, RESTAURANT_ID, name),
                 )
             self._conn.commit()
 
@@ -156,23 +136,19 @@ class Database:
             return None
         return self._one("SELECT * FROM people WHERE phone = ?", (phone,))
 
-    def upsert_person(
-        self, *, first_name="", last_name="", phone="", email=""
-    ) -> sqlite3.Row:
+    def upsert_person(self, *, first_name="", last_name="", phone="", email="") -> sqlite3.Row:
         existing = self.find_person_by_phone(phone) if phone else None
         if existing:
             return existing
         pid = _gen_id("person")
         self._exec(
-            "INSERT INTO people (id, first_name, last_name, phone, email)"
-            " VALUES (?,?,?,?,?)",
+            "INSERT INTO people (id, first_name, last_name, phone, email) VALUES (?,?,?,?,?)",
             (pid, first_name, last_name, phone, email),
         )
         return self.get_person(pid)
 
     def update_person(self, person_id: str, **fields) -> sqlite3.Row | None:
-        person = self.get_person(person_id)
-        if not person:
+        if not self.get_person(person_id):
             return None
         cols = {k: v for k, v in fields.items() if v is not None}
         if cols:
@@ -194,14 +170,29 @@ class Database:
             (phone,),
         )
 
-    def seated_count(self, restaurant_id: str, time: str) -> int:
-        """Total confirmed party size already booked at a given slot time."""
-        row = self._one(
-            "SELECT COALESCE(SUM(size), 0) AS n FROM bookings"
-            " WHERE restaurant_id = ? AND time = ? AND status = 'confirmed'",
-            (restaurant_id, time),
+    def confirmed_bookings_on_date(
+        self, restaurant_id: str, date: str, *, exclude_id: str = ""
+    ) -> list[sqlite3.Row]:
+        return self._all(
+            "SELECT id, time, duration_min, table_ids FROM bookings"
+            " WHERE restaurant_id = ? AND status = 'confirmed'"
+            " AND substr(time, 1, 10) = ? AND id != ?",
+            (restaurant_id, date, exclude_id),
         )
-        return int(row["n"]) if row else 0
+
+    def free_table_ids(
+        self, restaurant_id: str, start: str, duration_min: int, *, exclude_id: str = ""
+    ) -> list[str]:
+        """Table ids not occupied by any confirmed booking overlapping the turn."""
+        end = floorplan.add_minutes(start, duration_min)
+        date = start[:10]
+        occupied: set[str] = set()
+        for row in self.confirmed_bookings_on_date(restaurant_id, date, exclude_id=exclude_id):
+            b_start = row["time"]
+            b_end = floorplan.add_minutes(b_start, row["duration_min"])
+            if floorplan.overlaps(start, end, b_start, b_end):
+                occupied.update(filter(None, (row["table_ids"] or "").split(",")))
+        return [t.id for t in floorplan.FLOOR_PLAN if t.id not in occupied]
 
     def insert_booking(
         self,
@@ -211,34 +202,28 @@ class Database:
         experience_id: str,
         size: int,
         time: str,
+        duration_min: int,
+        table_ids: list[str],
         note: str = "",
         locale: str = "en",
-        modification_restricted: bool = False,
     ) -> sqlite3.Row:
         bid = _gen_id("booking")
         self._exec(
-            "INSERT INTO bookings (id, restaurant_id, person_id, experience_id,"
-            " size, status, time, note, locale, modification_restricted)"
-            " VALUES (?,?,?,?,?,?,?,?,?,?)",
+            "INSERT INTO bookings (id, restaurant_id, person_id, experience_id, size,"
+            " status, time, duration_min, table_ids, note, locale, modification_restricted)"
+            " VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
             (
-                bid,
-                restaurant_id,
-                person_id,
-                experience_id,
-                size,
-                "confirmed",
-                time,
-                note,
-                locale,
-                1 if modification_restricted else 0,
+                bid, restaurant_id, person_id, experience_id, size, "confirmed",
+                time, duration_min, ",".join(table_ids), note, locale, 0,
             ),
         )
         return self.get_booking(bid)
 
     def update_booking(self, booking_id: str, **fields) -> sqlite3.Row | None:
-        booking = self.get_booking(booking_id)
-        if not booking:
+        if not self.get_booking(booking_id):
             return None
+        if "table_ids" in fields and isinstance(fields["table_ids"], (list, tuple)):
+            fields["table_ids"] = ",".join(fields["table_ids"])
         cols = {k: v for k, v in fields.items() if v is not None}
         if cols:
             assignments = ", ".join(f"{k} = ?" for k in cols)
@@ -247,41 +232,3 @@ class Database:
                 (*cols.values(), booking_id),
             )
         return self.get_booking(booking_id)
-
-
-# -- availability generation (pure, no DB writes) ---------------------------
-
-def slot_label(iso_time: str) -> str:
-    """Render '...T18:30:00-04:00' as '6:30 PM'."""
-    hh, mm = iso_time[11:13], iso_time[14:16]
-    hour = int(hh)
-    suffix = "AM" if hour < 12 else "PM"
-    hour12 = hour % 12 or 12
-    return f"{hour12}:{mm} {suffix}"
-
-
-def generate_slots(date: str) -> list[dict]:
-    """All seatings configured for ``date`` (YYYY-MM-DD), before capacity checks."""
-    slots: list[dict] = []
-    for exp_id, name, times, pay in _SEATING_PLAN:
-        for hhmm in times:
-            slots.append(
-                {
-                    "time": f"{date}T{hhmm}:00{TZ_OFFSET}",
-                    "experience_id": exp_id,
-                    "experience_name": name,
-                    "payment_required": pay,
-                }
-            )
-    return slots
-
-
-def is_past(iso_time: str, *, now: dt.datetime | None = None) -> bool:
-    try:
-        when = dt.datetime.fromisoformat(iso_time)
-    except ValueError:
-        return False
-    now = now or dt.datetime.now(dt.timezone.utc)
-    if when.tzinfo is None:
-        when = when.replace(tzinfo=dt.timezone.utc)
-    return when < now

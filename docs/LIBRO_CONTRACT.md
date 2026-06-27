@@ -53,7 +53,10 @@ real Libro.
           {
             "time": "2026-07-20T18:00:00-04:00",
             "experience": { "id": "exp_dinner_yen", "name": "Dinner" },
-            "payment-required": false
+            "payment-required": false,
+            "arrangement": "merged",
+            "tables": ["Table 4", "Table 5"],
+            "seats": 8
           }
         ]
       }
@@ -62,9 +65,14 @@ real Libro.
 }
 ```
 
-The mock generates slots from a seating plan (lunch + dinner + a payment-required
-tasting menu), drops past slots, and removes any slot whose booked party size
-would exceed per-slot capacity (24 seats).
+The mock generates slots from weekday-aware services (lunch Mon–Sat, dinner
+daily, each up to a last-seating time), drops past slots, and — for the requested
+party size — only returns a time if the **table-assignment engine**
+(`mock_libro/floorplan.py`) can seat the party there given existing bookings'
+turn-time occupancy. `arrangement`/`tables`/`seats` describe how they'd be seated
+(a single table or a combined one). These seating-engine fields are a mock
+convenience; real Libro models availability differently, but the agent only reads
+them through `ReservationService`, so the translation is contained in `jsonapi.py`.
 
 ## Booking resource
 
@@ -77,6 +85,9 @@ would exceed per-slot capacity (24 seats).
       "size": 2,
       "status": "confirmed",
       "time": "2026-07-20T18:30:00-04:00",
+      "duration-min": 105,
+      "tables": ["Table 5"],
+      "arrangement": "single",
       "note": "window seat",
       "locale": "en",
       "modification-restricted": false
@@ -98,7 +109,8 @@ agent degrades to "take a message" rather than failing the call.
 | Code | Meaning | Agent behavior |
 |---|---|---|
 | 2001 | slot unavailable | offer nearby times / another day |
-| 2005 | party size out of range | take a message for large groups |
+| 2005 | party size out of range (e.g. 0) | re-ask the party size |
+| 2006 | large party — needs staff | stop booking, take a message |
 | 4001 | booking not cancelable | take a message for the team |
 | 4002 | modification restricted | take a message (staff-only change) |
 | 404  | not found | re-confirm the phone/name |

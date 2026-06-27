@@ -1,4 +1,4 @@
-"""FastAPI application exposing Libro-shaped JSON:API endpoints."""
+"""FastAPI application exposing Libro-shaped JSON:API endpoints (table-aware)."""
 
 from __future__ import annotations
 
@@ -8,12 +8,22 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
 from . import db as dbmod
+from . import floorplan
 from .db import Database
 
 CONTENT_TYPE = "application/vnd.libro-restricted-v2+json"
 
 
 # -- JSON:API serializers ---------------------------------------------------
+
+def _table_names(table_ids_csv: str) -> list[str]:
+    names = []
+    for tid in filter(None, (table_ids_csv or "").split(",")):
+        t = floorplan.TABLES_BY_ID.get(tid)
+        if t:
+            names.append(t.name)
+    return names
+
 
 def _person_resource(row) -> dict:
     return {
@@ -34,25 +44,22 @@ def _booking_resource(row, *, experience=None) -> dict:
         "person": {"data": {"type": "person", "id": row["person_id"]}},
     }
     if row["experience_id"]:
-        rel["experience"] = {
-            "data": {"type": "experience", "id": row["experience_id"]}
-        }
+        rel["experience"] = {"data": {"type": "experience", "id": row["experience_id"]}}
+    names = _table_names(row["table_ids"])
     attrs = {
         "size": row["size"],
         "status": row["status"],
         "time": row["time"],
+        "duration-min": row["duration_min"],
+        "tables": names,
+        "arrangement": "merged" if len(names) > 1 else "single",
         "note": row["note"],
         "locale": row["locale"],
         "modification-restricted": bool(row["modification_restricted"]),
     }
     if experience is not None:
         attrs["experience-name"] = experience["name"]
-    return {
-        "type": "booking",
-        "id": row["id"],
-        "attributes": attrs,
-        "relationships": rel,
-    }
+    return {"type": "booking", "id": row["id"], "attributes": attrs, "relationships": rel}
 
 
 def _restaurant_resource(row) -> dict:
@@ -81,10 +88,22 @@ def _error(code: str, status: int, title: str, detail: str = "") -> JSONResponse
 
 
 def _attrs(body: dict) -> dict:
-    """Accept either raw attrs or a JSON:API {data:{attributes:{}}} envelope."""
     if isinstance(body, dict) and "data" in body and isinstance(body["data"], dict):
         return body["data"].get("attributes", {}) or {}
     return body or {}
+
+
+def _party_size_error(size: int) -> JSONResponse | None:
+    """Return the right JSON:API error for an invalid party size, else None."""
+    if size < dbmod.MIN_PARTY_SIZE:
+        return _error("2005", 422, "Party size out of range",
+                      f"Party size must be at least {dbmod.MIN_PARTY_SIZE}.")
+    if floorplan.requires_staff(size):
+        return _error(
+            "2006", 422, "Large party requires staff",
+            f"Parties over {floorplan.MAX_ONLINE_PARTY} need to be arranged with our team.",
+        )
+    return None
 
 
 def create_app(db_path: str = ":memory:", *, seed: bool = True) -> FastAPI:
@@ -103,36 +122,36 @@ def create_app(db_path: str = ":memory:", *, seed: bool = True) -> FastAPI:
     def list_restaurants():
         return _ok([_restaurant_resource(r) for r in db.list_restaurants()])
 
-    # -- availability (seatings) ------------------------------------------
+    # -- availability (seatings, table-aware) ------------------------------
     @app.get("/restricted/restaurant/seatings")
-    def seatings(date: str, size: int = 2,
-                 restaurant: str = dbmod.RESTAURANT_ID):
-        if not (dbmod.MIN_PARTY_SIZE <= size <= dbmod.MAX_PARTY_SIZE):
-            return _error("2005", 422, "Party size out of range",
-                          f"Party size must be {dbmod.MIN_PARTY_SIZE}-"
-                          f"{dbmod.MAX_PARTY_SIZE}.")
+    def seatings(date: str, size: int = 2, restaurant: str = dbmod.RESTAURANT_ID):
+        err = _party_size_error(size)
+        if err is not None:
+            return err
 
-        by_date: dict[str, list[dict]] = {date: []}
-        for slot in dbmod.generate_slots(date):
-            if dbmod.is_past(slot["time"]):
+        slots: list[dict] = []
+        for seating in floorplan.candidate_starts(date):
+            if floorplan.is_past(seating.time):
                 continue
-            booked = db.seated_count(restaurant, slot["time"])
-            if booked + size > dbmod.SLOT_CAPACITY:
+            free = db.free_table_ids(restaurant, seating.time, seating.turn_minutes)
+            assignment = floorplan.assign(size, free)
+            if assignment is None:
                 continue
-            by_date[date].append(
+            slots.append(
                 {
-                    "time": slot["time"],
-                    "experience": {
-                        "id": slot["experience_id"],
-                        "name": slot["experience_name"],
-                    },
-                    "payment-required": slot["payment_required"],
+                    "time": seating.time,
+                    "experience": {"id": seating.experience_id,
+                                   "name": seating.experience_name},
+                    "payment-required": False,
+                    "arrangement": "merged" if assignment.merged else "single",
+                    "tables": assignment.table_names,
+                    "seats": assignment.seats,
                 }
             )
         return _ok({
             "type": "seatings",
             "id": f"{restaurant}:{date}",
-            "attributes": {"size": size, "slots": by_date},
+            "attributes": {"size": size, "slots": {date: slots}},
         })
 
     # -- bookings: list / create ------------------------------------------
@@ -147,27 +166,24 @@ def create_app(db_path: str = ":memory:", *, seed: bool = True) -> FastAPI:
     async def create_booking(request: Request):
         attrs = _attrs(await request.json())
         size = int(attrs.get("size", 0) or 0)
-        if not (dbmod.MIN_PARTY_SIZE <= size <= dbmod.MAX_PARTY_SIZE):
-            return _error("2005", 422, "Party size out of range",
-                          f"Party size must be {dbmod.MIN_PARTY_SIZE}-"
-                          f"{dbmod.MAX_PARTY_SIZE}.")
+        err = _party_size_error(size)
+        if err is not None:
+            return err
 
         time = attrs.get("time", "")
         restaurant_id = attrs.get("restaurant-id") or dbmod.RESTAURANT_ID
 
-        # Resolve the requested slot from the configured plan.
-        date = time[:10]
-        match = next(
-            (s for s in dbmod.generate_slots(date) if s["time"] == time), None
-        )
-        if match is None or dbmod.is_past(time):
+        seating = floorplan.slot_for_time(time)
+        if seating is None or floorplan.is_past(time):
             return _error("2001", 422, "Slot unavailable",
                           "The requested time is not an open seating.")
-        if db.seated_count(restaurant_id, time) + size > dbmod.SLOT_CAPACITY:
-            return _error("2001", 422, "Slot unavailable",
-                          "The requested time is fully booked.")
 
-        experience_id = attrs.get("experience-id") or match["experience_id"]
+        free = db.free_table_ids(restaurant_id, time, seating.turn_minutes)
+        assignment = floorplan.assign(size, free)
+        if assignment is None:
+            return _error("2001", 422, "Slot unavailable",
+                          "We're fully committed at that time for that party size.")
+
         person = db.upsert_person(
             first_name=attrs.get("first-name", ""),
             last_name=attrs.get("last-name", ""),
@@ -177,14 +193,16 @@ def create_app(db_path: str = ":memory:", *, seed: bool = True) -> FastAPI:
         booking = db.insert_booking(
             restaurant_id=restaurant_id,
             person_id=person["id"],
-            experience_id=experience_id,
+            experience_id=seating.experience_id,
             size=size,
             time=time,
+            duration_min=seating.turn_minutes,
+            table_ids=assignment.table_ids,
             note=attrs.get("note", ""),
             locale=attrs.get("locale", "en"),
         )
-        exp = db.get_experience(experience_id)
-        return _ok(_booking_resource(booking, experience=exp), status=201)
+        return _ok(_booking_resource(booking, experience=db.get_experience(seating.experience_id)),
+                   status=201)
 
     @app.get("/restricted/restaurant/bookings/{booking_id}")
     def get_booking(booking_id: str):
@@ -205,9 +223,19 @@ def create_app(db_path: str = ":memory:", *, seed: bool = True) -> FastAPI:
         fields: dict = {}
         if "size" in attrs:
             size = int(attrs["size"])
-            if not (dbmod.MIN_PARTY_SIZE <= size <= dbmod.MAX_PARTY_SIZE):
-                return _error("2005", 422, "Party size out of range")
+            err = _party_size_error(size)
+            if err is not None:
+                return err
+            # Re-seat the (possibly larger/smaller) party at the same time.
+            free = db.free_table_ids(
+                row["restaurant_id"], row["time"], row["duration_min"], exclude_id=booking_id
+            )
+            assignment = floorplan.assign(size, free)
+            if assignment is None:
+                return _error("2001", 422, "Slot unavailable",
+                              "We can't fit that party size at the current time.")
             fields["size"] = size
+            fields["table_ids"] = assignment.table_ids
         if "note" in attrs:
             fields["note"] = attrs["note"]
         updated = db.update_booking(booking_id, **fields)
@@ -223,18 +251,23 @@ def create_app(db_path: str = ":memory:", *, seed: bool = True) -> FastAPI:
                           "This booking can only be changed by restaurant staff.")
         attrs = _attrs(await request.json())
         new_time = attrs.get("time", "")
-        date = new_time[:10]
-        match = next(
-            (s for s in dbmod.generate_slots(date) if s["time"] == new_time), None
-        )
-        if match is None or dbmod.is_past(new_time):
+        seating = floorplan.slot_for_time(new_time)
+        if seating is None or floorplan.is_past(new_time):
             return _error("2001", 422, "Slot unavailable",
                           "The requested time is not an open seating.")
-        if db.seated_count(row["restaurant_id"], new_time) + row["size"] > dbmod.SLOT_CAPACITY:
+        free = db.free_table_ids(
+            row["restaurant_id"], new_time, seating.turn_minutes, exclude_id=booking_id
+        )
+        assignment = floorplan.assign(row["size"], free)
+        if assignment is None:
             return _error("2001", 422, "Slot unavailable",
-                          "The requested time is fully booked.")
+                          "We're fully committed at that time for that party size.")
         updated = db.update_booking(
-            booking_id, time=new_time, experience_id=match["experience_id"]
+            booking_id,
+            time=new_time,
+            experience_id=seating.experience_id,
+            duration_min=seating.turn_minutes,
+            table_ids=assignment.table_ids,
         )
         return _ok(_booking_resource(updated))
 
@@ -246,7 +279,7 @@ def create_app(db_path: str = ":memory:", *, seed: bool = True) -> FastAPI:
         if row["modification_restricted"]:
             return _error("4001", 422, "Not cancelable",
                           "This booking can only be changed by restaurant staff.")
-        if row["status"] != "confirmed" or dbmod.is_past(row["time"]):
+        if row["status"] != "confirmed" or floorplan.is_past(row["time"]):
             return _error("4001", 422, "Not cancelable",
                           "This booking can no longer be cancelled online.")
         updated = db.update_booking(booking_id, status="cancelled")
@@ -300,5 +333,4 @@ def create_app(db_path: str = ":memory:", *, seed: bool = True) -> FastAPI:
     return app
 
 
-# A default module-level app for `uvicorn mock_libro.app:app` during local dev.
 app = create_app(":memory:", seed=True)
