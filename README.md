@@ -10,6 +10,11 @@ picking the right table, **combining tables** for larger parties, respecting how
 long a table is held, and **escalating oversized parties to staff** — by calling
 a deterministic seating engine rather than guessing.
 
+> **For the developer:** hand the owner
+> [`docs/OWNER_QUESTIONNAIRE.md`](docs/OWNER_QUESTIONNAIRE.md) — it collects the
+> real hours, tables, and policies (with sensible defaults) needed to make the
+> agent exact. Everything runs on realistic placeholders until then.
+
 This repository is **Phase 1**: a $0, web-testable agent built on
 [LiveKit Agents](https://docs.livekit.io/agents/), wired to a **mock Libro
 reservation API** so the whole thing runs end-to-end with no Libro credentials
@@ -53,7 +58,7 @@ covered without any cloud services or the heavy agent runtime:
 
 ```bash
 pip install -e ".[dev]"
-pytest -q          # 24 tests: mock JSON:API shapes, service round-trips, concierge speech
+pytest -q          # 59 tests: floor plan, mock JSON:API, service round-trips, dates, phones, concierge
 ```
 
 ### 2. Run the mock Libro server (optional — tests use it in-process)
@@ -178,6 +183,25 @@ should never do table math), and the agent reasons by *calling* it:
 `python scripts/demo.py` walks through all of these out loud. The same logic is
 covered by `tests/test_floorplan.py` and `tests/test_reservation_service.py`.
 
+## Robustness for real calls
+
+The things that break voice agents in practice are handled deterministically
+(not left to the model), following patterns from LiveKit's reference agents:
+
+- **Dates** — callers say "this Friday", "tomorrow", "July 5". `datetime_resolve`
+  turns those into real dates relative to today (in Montreal time), rolls
+  past dates forward, and refuses dates in the past or beyond the booking
+  horizon. Today's date is also injected into the prompt.
+- **Phone numbers** — "(514) 555-1234", "514.555.1234", or spelled-out digits all
+  normalize to one E.164 form, so a number given at booking matches at
+  lookup/cancel. Invalid numbers are re-prompted, not silently accepted.
+- **Remembered call state** — name, phone, and party size collected once persist
+  for the rest of the call (LiveKit's `UserData` pattern), so the agent can
+  cancel "the reservation under my number" without asking again.
+- **Runtime** — the worker prewarms VAD once per process, uses semantic turn
+  detection + preemptive generation to cut latency, enables Krisp telephony
+  noise cancellation, and logs per-turn metrics + a usage summary per call.
+
 ## Phased plan
 
 - **Phase 1 (this repo):** free, web-tested agent against the mock. ✅
@@ -223,14 +247,16 @@ src/yen_agent/
     mock.py            #   MockReservationService (in-process or http)
     libro.py           #   LibroReservationService (real, OAuth) — Phase 3
   concierge.py         # reservation orchestration + spoken responses (no LiveKit)
+  datetime_resolve.py  # deterministic natural-language date parsing
+  phone.py             # phone-number normalization to E.164
   tools.py             # LiveKit @function_tool wrappers
-  agent.py             # AgentSession wiring + entrypoint
+  agent.py             # AgentSession wiring + entrypoint (prewarm, metrics)
   prompts.py / faq.py  # system prompt + Yen FAQ knowledge base
   config.py            # env-driven settings
-  config.py            # env-driven settings
 scripts/demo.py        # text-mode walkthrough of the reservation reasoning
-tests/                 # 40 tests, run with no cloud services
-docs/LIBRO_CONTRACT.md # the JSON:API subset the mock mirrors + caveats
+tests/                 # 59 tests, run with no cloud services
+docs/OWNER_QUESTIONNAIRE.md  # questions for the restaurant owner (hand this off)
+docs/LIBRO_CONTRACT.md       # the JSON:API subset the mock mirrors + caveats
 ```
 
 ## Disclosure

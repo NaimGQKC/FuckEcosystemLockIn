@@ -67,6 +67,19 @@ async def main() -> None:
                          message="Party of 14 for a birthday, wants this Friday evening"))
     print(f"\n[messages captured for staff: {len(c.messages)}]")
 
+    # --- input understanding (the things that break live) -----------------
+    import datetime as _dt
+
+    from yen_agent import datetime_resolve as dr
+    from yen_agent.phone import normalize_phone
+
+    print("\n=== Input understanding (deterministic) ===")
+    ref = _dt.date(2026, 7, 1)  # a Wednesday
+    for phrase in ["this Friday", "tomorrow", "next Monday", "July 5", "in 3 days"]:
+        print(f"  date  {phrase!r:>14} (today Wed 2026-07-01) -> {dr.resolve_date(phrase, today=ref)}")
+    for raw in ["514-555-1234", "(514) 555 7788", "five one four five five five one two one two"]:
+        print(f"  phone {raw!r:>48} -> {normalize_phone(raw)}")
+
     await svc.aclose()
 
 

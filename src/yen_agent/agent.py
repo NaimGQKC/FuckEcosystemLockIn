@@ -8,6 +8,11 @@ Run modes (after `pip install -e ".[agent]"` and filling in `.env`):
 The reservation backend is chosen by env (`YEN_RESERVATION_BACKEND`), defaulting
 to the in-process mock — so this runs end-to-end with no Libro credentials.
 
+Structure follows LiveKit's recommended patterns: a `prewarm` hook that loads
+VAD once per worker process, metrics + usage collection, semantic turn
+detection, telephony noise cancellation, and the current date injected into the
+prompt so relative dates ("this Friday") resolve correctly.
+
 Model identifiers below are the recommended low-cost stack. Plugin model names
 occasionally change between releases; verify them against the installed plugin
 version if a model isn't found.
@@ -15,19 +20,40 @@ version if a model isn't found.
 
 from __future__ import annotations
 
+import datetime as dt
 import logging
 
 from dotenv import load_dotenv
-from livekit.agents import AgentSession, JobContext, RoomInputOptions, WorkerOptions, cli
+from livekit.agents import (
+    AgentSession,
+    JobContext,
+    JobProcess,
+    MetricsCollectedEvent,
+    RoomInputOptions,
+    WorkerOptions,
+    cli,
+    metrics,
+)
 from livekit.plugins import deepgram, silero
 
-from .config import Settings
 from .concierge import Concierge
+from .config import Settings
 from .prompts import GREETING_EN, GREETING_FR, system_instructions
 from .reservation import build_service
 from .tools import ReservationAgent
 
+try:
+    from zoneinfo import ZoneInfo
+
+    _MTL = ZoneInfo("America/Toronto")
+except Exception:  # pragma: no cover
+    _MTL = dt.timezone(dt.timedelta(hours=-4))
+
 logger = logging.getLogger("yen-agent")
+
+
+def _montreal_today() -> dt.date:
+    return dt.datetime.now(_MTL).date()
 
 
 def _build_stt(settings: Settings):
@@ -51,9 +77,7 @@ def _build_tts(settings: Settings):
     if settings.tts_provider == "cartesia":
         from livekit.plugins import cartesia
 
-        # Sonic supports French natively; pick a multilingual voice in the dashboard.
         return cartesia.TTS(model="sonic-2", language="fr" if settings.is_multilingual else "en")
-    # Deepgram Aura-2 (English) — cheapest good option for the English MVP.
     return deepgram.TTS(model="aura-2-thalia-en")
 
 
@@ -71,29 +95,55 @@ def _build_turn_detection(settings: Settings):
         return None
 
 
+def prewarm(proc: JobProcess) -> None:
+    """Load the (heavier) VAD model once per worker process, not per call."""
+    proc.userdata["vad"] = silero.VAD.load()
+
+
 async def entrypoint(ctx: JobContext) -> None:
     load_dotenv()
     settings = Settings.from_env()
 
     service = build_service(settings)
     locale = "fr" if settings.is_multilingual else "en"
-    concierge = Concierge(service, locale=locale)
+    today = _montreal_today()
+    concierge = Concierge(service, locale=locale, today=today)
     agent = ReservationAgent(
         concierge,
-        instructions=system_instructions(multilingual=settings.is_multilingual),
+        instructions=system_instructions(
+            multilingual=settings.is_multilingual, today=today.isoformat()
+        ),
     )
 
+    vad = ctx.proc.userdata.get("vad") or silero.VAD.load()
     session_kwargs = dict(
         stt=_build_stt(settings),
         llm=_build_llm(settings),
         tts=_build_tts(settings),
-        vad=silero.VAD.load(),
+        vad=vad,
+        # Start generating a response as soon as the caller is likely done,
+        # which cuts perceived latency; safe to keep on with turn detection.
+        preemptive_generation=True,
     )
     turn_detection = _build_turn_detection(settings)
     if turn_detection is not None:
         session_kwargs["turn_detection"] = turn_detection
 
     session = AgentSession(**session_kwargs)
+
+    # -- observability: log per-turn metrics and a usage summary at end -----
+    usage = metrics.UsageCollector()
+
+    @session.on("metrics_collected")
+    def _on_metrics(ev: MetricsCollectedEvent) -> None:
+        metrics.log_metrics(ev.metrics)
+        usage.collect(ev.metrics)
+
+    async def _log_usage() -> None:
+        logger.info("call usage summary: %s", usage.get_summary())
+
+    ctx.add_shutdown_callback(_log_usage)
+    ctx.add_shutdown_callback(service.aclose)
 
     # Krisp telephony noise cancellation improves narrowband phone audio.
     room_input_options = None
@@ -110,12 +160,9 @@ async def entrypoint(ctx: JobContext) -> None:
     greeting = GREETING_FR if settings.is_multilingual else GREETING_EN
     await session.generate_reply(instructions=f"Greet the caller with: {greeting}")
 
-    # Ensure the backend HTTP client is closed when the call ends.
-    ctx.add_shutdown_callback(service.aclose)
-
 
 def main() -> None:
-    cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint))
+    cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint, prewarm_fnc=prewarm))
 
 
 if __name__ == "__main__":

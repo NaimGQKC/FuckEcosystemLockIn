@@ -26,8 +26,9 @@ class ReservationAgent(Agent):
         """Check open reservation times at Yen.
 
         Args:
-            date: The date to check, as YYYY-MM-DD. Resolve relative dates
-                (e.g. "this Friday") to an absolute date before calling.
+            date: The date the caller wants. Pass their words ("this Friday",
+                "tomorrow", "July 5") or an absolute YYYY-MM-DD — the system
+                resolves it relative to today either way.
             party_size: Number of guests.
             part_of_day: Optional — "lunch" or "dinner" to narrow results when the
                 caller asks about a specific service (e.g. "this evening" -> "dinner").
@@ -55,7 +56,8 @@ class ReservationAgent(Agent):
                 result (e.g. "2026-06-28T18:30:00-04:00").
             party_size: Number of guests.
             first_name: Guest's first name.
-            phone: Callback phone number for the reservation.
+            phone: Callback phone number in any format (e.g. "514-555-1234"); it
+                is normalized automatically. Omit only if already given earlier.
             last_name: Guest's last name, if given.
             email: Guest's email, if given.
             note: Any special request or dietary note.

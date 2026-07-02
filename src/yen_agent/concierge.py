@@ -8,9 +8,11 @@ responses. ``tools.py`` is a thin LiveKit wrapper over these methods.
 
 from __future__ import annotations
 
+import datetime as dt
 from dataclasses import dataclass, field
 
-from . import faq
+from . import datetime_resolve, faq
+from .phone import normalize_phone
 from .reservation import (
     Availability,
     Booking,
@@ -29,6 +31,20 @@ class Message:
     body: str
 
 
+@dataclass
+class CallState:
+    """What we've learned during this call, so the agent doesn't re-ask.
+
+    Mirrors LiveKit's UserData pattern: collected fields persist across tool
+    calls within a single conversation.
+    """
+
+    name: str = ""
+    phone: str = ""  # normalized E.164
+    party_size: int = 0
+    last_date: str = ""  # YYYY-MM-DD
+
+
 def _booking_summary(b: Booking, *, locale: str = "en") -> str:
     when = _spoken_time(b.time)
     exp = f" ({b.experience_name})" if b.experience_name else ""
@@ -37,33 +53,69 @@ def _booking_summary(b: Booking, *, locale: str = "en") -> str:
     return f"a reservation for {b.size} on {when}{exp}"
 
 
+_MONTHS = [
+    "January", "February", "March", "April", "May", "June", "July",
+    "August", "September", "October", "November", "December",
+]
+
+
+def _spoken_date(iso_date: str) -> str:
+    """Render '2026-06-28' as 'June 28'."""
+    try:
+        month, day = int(iso_date[5:7]), int(iso_date[8:10])
+    except (ValueError, IndexError):
+        return iso_date
+    return f"{_MONTHS[month - 1]} {day}"
+
+
 def _spoken_time(iso_time: str) -> str:
     """Render '2026-06-28T18:30:00-04:00' as 'June 28 at 6:30 PM'."""
-    months = [
-        "January", "February", "March", "April", "May", "June", "July",
-        "August", "September", "October", "November", "December",
-    ]
     try:
-        year, month, day = int(iso_time[0:4]), int(iso_time[5:7]), int(iso_time[8:10])
         hour, minute = int(iso_time[11:13]), iso_time[14:16]
     except (ValueError, IndexError):
         return iso_time
     suffix = "AM" if hour < 12 else "PM"
-    return f"{months[month - 1]} {day} at {hour % 12 or 12}:{minute} {suffix}"
+    return f"{_spoken_date(iso_time)} at {hour % 12 or 12}:{minute} {suffix}"
 
 
 class Concierge:
-    def __init__(self, service: ReservationService, *, locale: str = "en"):
+    def __init__(
+        self,
+        service: ReservationService,
+        *,
+        locale: str = "en",
+        today: dt.date | None = None,
+    ):
         self.service = service
         self.locale = locale
+        self.today = today or dt.date.today()
         self.messages: list[Message] = []
+        self.state = CallState()
 
     # -- availability ------------------------------------------------------
     async def check_availability(
         self, *, date: str, party_size: int, part_of_day: str = ""
     ) -> str:
+        resolved = datetime_resolve.resolve_date(date, today=self.today)
+        if resolved is None:
+            return (
+                "I want to get the date right — what day were you thinking? "
+                "You can say something like 'this Friday' or a date."
+            )
+        horizon = datetime_resolve.validate_horizon(resolved, today=self.today)
+        if horizon == "past":
+            return "That date has already passed — what upcoming day works for you?"
+        if horizon == "too_far":
+            return "That's further out than we take reservations. Could you pick a nearer date?"
+
+        iso_date = resolved.isoformat()
+        if not part_of_day:
+            part_of_day = datetime_resolve.infer_part_of_day(date)
+        self.state.party_size = party_size or self.state.party_size
+        self.state.last_date = iso_date
+
         try:
-            availability = await self.service.check_availability(date, party_size)
+            availability = await self.service.check_availability(iso_date, party_size)
         except ReservationError as exc:
             return exc.spoken_message
 
@@ -81,8 +133,7 @@ class Concierge:
         if not availability.is_available:
             return (
                 f"I'm sorry, I don't see any open tables for {party_size} on "
-                f"{_spoken_time(date + 'T00:00:00')[:-9].strip()}. "
-                "Would another day work?"
+                f"{_spoken_date(iso_date)}. Would another day work?"
             )
 
         labels = [s.label for s in availability.slots]
@@ -118,19 +169,31 @@ class Concierge:
         email: str = "",
         note: str = "",
     ) -> str:
+        normalized = normalize_phone(phone) or self.state.phone
+        if not normalized:
+            return (
+                "I'll just need a phone number for the reservation — what's the "
+                "best number to reach you?"
+            )
         try:
             booking = await self.service.create_booking(
                 time=time,
                 party_size=party_size,
                 first_name=first_name,
                 last_name=last_name,
-                phone=phone,
+                phone=normalized,
                 email=email,
                 note=note,
                 locale=self.locale,
             )
         except ReservationError as exc:
             return exc.spoken_message
+
+        # Remember for the rest of the call.
+        self.state.name = first_name or self.state.name
+        self.state.phone = normalized
+        self.state.party_size = party_size
+        self.state.last_date = booking.time[:10] or self.state.last_date
 
         combined = (
             " We'll combine a couple of tables for your group." if booking.is_merged else ""
@@ -142,8 +205,12 @@ class Concierge:
 
     # -- lookup ------------------------------------------------------------
     async def lookup_reservations(self, *, phone: str) -> str:
+        normalized = normalize_phone(phone) or self.state.phone
+        if not normalized:
+            return "What's the phone number the reservation is under?"
+        self.state.phone = normalized
         try:
-            bookings = await self.service.list_bookings(phone=phone)
+            bookings = await self.service.list_bookings(phone=normalized)
         except ReservationError as exc:
             return exc.spoken_message
 
@@ -220,10 +287,12 @@ class Concierge:
                 return await self.service.get_booking(booking_id)
             except ReservationError as exc:
                 return exc.spoken_message
-        if phone:
+        normalized = normalize_phone(phone) or self.state.phone
+        if normalized:
+            self.state.phone = normalized
             try:
                 bookings = [
-                    b for b in await self.service.list_bookings(phone=phone)
+                    b for b in await self.service.list_bookings(phone=normalized)
                     if not b.is_cancelled
                 ]
             except ReservationError as exc:

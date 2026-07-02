@@ -15,7 +15,7 @@ def _faq_digest() -> str:
     return "\n".join(lines)
 
 
-def system_instructions(*, multilingual: bool) -> str:
+def system_instructions(*, multilingual: bool, today: str = "") -> str:
     lang = (
         "Detect whether the caller is speaking English or French from their first "
         "words and respond in that language for the rest of the call. You may "
@@ -23,7 +23,11 @@ def system_instructions(*, multilingual: bool) -> str:
         if multilingual
         else "Respond in English."
     )
-    return f"""You are the phone reservations assistant for YEN Cuisine Japonaise, an intimate Japanese restaurant in downtown Montreal.
+    date_line = (
+        f"Today's date is {today} (America/Toronto timezone). Use it for any "
+        "relative dates.\n\n" if today else ""
+    )
+    return f"""{date_line}You are the phone reservations assistant for YEN Cuisine Japonaise, an intimate Japanese restaurant in downtown Montreal.
 
 # Identity & disclosure
 - Right after greeting, if it comes up or before taking any action, let the caller
