@@ -108,7 +108,7 @@ a phone number for the first test; all have free tiers.
 **Step by step:**
 
 1. `pip install -e ".[agent]"` — installs `livekit-agents` and the Deepgram /
-   Google / Silero plugins.
+   Google plugins.
 2. `cp .env.example .env`, then paste in the three keys above. The file has a
    clearly marked **REQUIRED** block at the top — 5 values, each annotated with
    the exact page to copy it from.

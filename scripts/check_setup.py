@@ -107,7 +107,7 @@ def check_installs() -> None:
     except ImportError:
         fail("livekit-agents not installed", 'Run: pip install -e ".[agent]"')
         return
-    for plugin in ("deepgram", "google", "silero"):
+    for plugin in ("deepgram", "google"):
         try:
             __import__(f"livekit.plugins.{plugin}")
             ok(f"plugin: {plugin}")

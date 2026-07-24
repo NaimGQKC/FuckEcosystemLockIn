@@ -22,8 +22,10 @@ dependencies = [
 # The voice agent runtime. Heavier (pulls the turn-detector model etc.).
 # Install with:  pip install -e ".[agent]"
 agent = [
-    "livekit-agents[deepgram,openai,google,silero,turn-detector]>=1.6.3",
-    "livekit-plugins-cartesia>=1.6.3",
+    # VAD is bundled in AgentSession and turn detection is hosted, so the
+    # silero / turn-detector plugins (deprecated upstream) are not needed.
+    "livekit-agents[deepgram,openai,google]>=1.6.4",
+    "livekit-plugins-cartesia>=1.6.4",
     "livekit-plugins-noise-cancellation>=0.2",
     "python-dotenv>=1.0",
 ]

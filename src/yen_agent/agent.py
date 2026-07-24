@@ -8,10 +8,10 @@ Run modes (after `pip install -e ".[agent]"` and filling in `.env`):
 The reservation backend is chosen by env (`YEN_RESERVATION_BACKEND`), defaulting
 to the in-process mock — so this runs end-to-end with no Libro credentials.
 
-Structure follows LiveKit's recommended patterns: a `prewarm` hook that loads
-VAD once per worker process, metrics + usage collection, semantic turn
-detection, telephony noise cancellation, and the current date injected into the
-prompt so relative dates ("this Friday") resolve correctly.
+Structure follows LiveKit's recommended patterns: bundled VAD, metrics + usage
+collection, hosted semantic turn detection, telephony noise cancellation, and
+the current date injected into the prompt so relative dates ("this Friday")
+resolve correctly. Compatible with livekit-agents >= 1.6.4.
 
 Model identifiers below are the recommended low-cost stack. Plugin model names
 occasionally change between releases; verify them against the installed plugin
@@ -29,7 +29,6 @@ from dotenv import load_dotenv
 from livekit.agents import (
     AgentSession,
     JobContext,
-    JobProcess,
     MetricsCollectedEvent,
     RoomInputOptions,
     TurnHandlingOptions,
@@ -37,7 +36,7 @@ from livekit.agents import (
     cli,
     metrics,
 )
-from livekit.plugins import deepgram, silero
+from livekit.plugins import deepgram
 
 from .concierge import Concierge
 from .config import Settings
@@ -108,11 +107,6 @@ def _build_turn_handling(settings: Settings) -> TurnHandlingOptions:
     return opts
 
 
-def prewarm(proc: JobProcess) -> None:
-    """Load the (heavier) VAD model once per worker process, not per call."""
-    proc.userdata["vad"] = silero.VAD.load()
-
-
 async def entrypoint(ctx: JobContext) -> None:
     load_dotenv()
     settings = Settings.from_env()
@@ -128,12 +122,11 @@ async def entrypoint(ctx: JobContext) -> None:
         ),
     )
 
-    vad = ctx.proc.userdata.get("vad") or silero.VAD.load()
+    # VAD: AgentSession bundles silero by default, so no explicit vad= needed.
     session = AgentSession(
         stt=_build_stt(settings),
         llm=_build_llm(settings),
         tts=_build_tts(settings),
-        vad=vad,
         turn_handling=_build_turn_handling(settings),
     )
 
@@ -168,7 +161,7 @@ async def entrypoint(ctx: JobContext) -> None:
 
 
 def main() -> None:
-    cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint, prewarm_fnc=prewarm))
+    cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint))
 
 
 if __name__ == "__main__":
