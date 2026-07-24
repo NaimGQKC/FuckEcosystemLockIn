@@ -108,23 +108,31 @@ a phone number for the first test; all have free tiers.
 **Step by step:**
 
 1. `pip install -e ".[agent]"` — installs `livekit-agents` and the Deepgram /
-   Google / Silero / turn-detector plugins. (First run downloads a small
-   turn-detection model.)
-2. `cp .env.example .env`, then paste in the three keys above.
-3. **Talk to it locally — no phone, no server:**
+   Google / Silero plugins.
+2. `cp .env.example .env`, then paste in the three keys above. The file has a
+   clearly marked **REQUIRED** block at the top — 5 values, each annotated with
+   the exact page to copy it from.
+3. **Check your setup before starting:**
+   ```bash
+   python scripts/check_setup.py
+   ```
+   This validates the `.env`, the installed packages, and makes live test calls
+   to Deepgram / Google / LiveKit to confirm each key actually works — with a
+   fix hint for anything wrong. Green means go.
+4. **Talk to it locally — no phone, no server:**
    ```bash
    python agent.py console
    ```
    Speak into your mic; you'll hear the agent answer. Try: *"Do you have a table
    for two on Saturday evening?"* → *"Make it a party of eight"* → *"Actually
    we're fourteen."*
-4. **Test in the browser** (shows the agent as it would behave deployed):
+5. **Test in the browser** (shows the agent as it would behave deployed):
    ```bash
    python agent.py dev
    ```
    Then open your project's **Agent Console** in the LiveKit Cloud dashboard and
    click connect. This uses free WebRTC minutes, not telephony.
-5. **Add a real phone number (Phase 2, optional):** buy a Twilio Canadian local
+6. **Add a real phone number (Phase 2, optional):** buy a Twilio Canadian local
    number, create an Elastic SIP trunk, and point an inbound LiveKit SIP trunk +
    dispatch rule at the agent. No agent code changes — a phone caller is just
    another participant. (Costs ~$1/mo for the number + per-minute usage.)
