@@ -12,9 +12,14 @@ stripped out, so the console output is safe to share.
 1. In Chrome/Edge, open  https://dashboard.libroreserve.com/restaurants/8169/reservations
    and log in.
 2. Press F12 → open the **Network** tab. Tick **Preserve log**. Filter: **Fetch/XHR**.
-3. Do the things we want to learn: change the reservation **date**, and click
-   **+ Reservation** → pick a date and party size so the availability grid loads.
-   (You do NOT need to save a booking — just opening the grid triggers the calls.)
+3. Do the things we want to learn:
+   a. Click **+ Reservation**, pick a date/party, and **type a name or phone in
+      "Search or add guest"** (this reveals the real guest-search endpoint).
+   b. To capture the create payload, actually **complete one booking** for an
+      obviously-fake guest ("ZZ Test") on a far-future off-peak slot — then
+      **cancel it** in the dashboard right after (captures POST /bookings + the
+      cancel call). This is the one deliberate write; the parser reads it from the
+      HAR, it doesn't book anything itself.
 4. Right-click anywhere in the Network list → **Save all as HAR with content**.
    Save it as e.g.  libro.har  in this folder.
 5. Run:  python scripts/parse_har.py libro.har
@@ -139,9 +144,22 @@ def main() -> int:
                 parsed = json.loads(text)
             except ValueError:
                 parsed = None
+
+        # Request body for writes (POST/PATCH/PUT) — this is the create payload
+        # we can't learn any other way. Never includes headers/token.
+        req_body = None
+        post = req.get("postData", {}) or {}
+        ptext = post.get("text", "")
+        if method != "GET" and ptext:
+            try:
+                req_body = json.loads(ptext)
+            except ValueError:
+                req_body = None
+
         seen[key] = {
             "method": method, "host": host, "path": path, "qkeys": qkeys,
             "status": res.get("status"), "mime": mime, "body": parsed,
+            "req_body": req_body,
         }
 
     if not seen:
@@ -155,9 +173,12 @@ def main() -> int:
         qs = f"  ?{', '.join(k for k in info['qkeys'] if k)}" if info["qkeys"] else ""
         print(f"── {info['method']} {info['path']}{qs}")
         print(f"     host={info['host']}  status={info['status']}  {info['mime']}")
+        if isinstance(info.get("req_body"), (dict, list)):
+            print("     REQUEST BODY SCHEMA:", json.dumps(schema(info["req_body"]))[:800])
+            print("     REQUEST BODY SAMPLE:", json.dumps(redact(info["req_body"]), ensure_ascii=False)[:800])
         if isinstance(info["body"], (dict, list)):
-            print("     SCHEMA:", json.dumps(schema(info["body"]))[:600])
-            print("     SAMPLE:", json.dumps(redact(info["body"]), ensure_ascii=False)[:600])
+            print("     RESPONSE SCHEMA:", json.dumps(schema(info["body"]))[:600])
+            print("     RESPONSE SAMPLE:", json.dumps(redact(info["body"]), ensure_ascii=False)[:600])
         print()
 
     print("^ Safe to share (token/PII stripped). Keep the .har file itself private.")
