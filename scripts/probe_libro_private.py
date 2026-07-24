@@ -41,7 +41,9 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
 sys.path.insert(0, str(ROOT))
 
-ACCEPT = "application/vnd.libro-private-v2+json"
+# The API versions per endpoint via Accept: availabilities = v2, JSON:API = v1.
+ACCEPT_V1 = "application/vnd.libro-private-v1+json"
+ACCEPT_V2 = "application/vnd.libro-private-v2+json"
 
 # Leaf values under these key names are shown as-is (non-PII, useful for mapping).
 SAFE_VALUE_KEYS = {
@@ -188,19 +190,17 @@ def _summary(label: str, status: int, ctype: str, body) -> str:
 
 # CONFIRMED read-only endpoints (from a live dashboard HAR capture, 24 Jul 2026).
 # {r}=restaurant id, {d}=date, {q}=guest query. All GET, all read-only.
-def _candidates(r: str, d: str, p: str, q: str) -> list[tuple[str, str, dict]]:
+def _candidates(r: str, d: str, p: str, q: str) -> list[tuple[str, str, dict, str]]:
+    # (label, path, params, accept-version)
     cands = [
-        ("avail: /availabilities/{date}", f"/availabilities/{d}", {"restaurant-id": r}),
+        ("avail: /availabilities/{date}", f"/availabilities/{d}", {"restaurant-id": r}, ACCEPT_V2),
         ("avail: /availabilities/summary", "/availabilities/summary",
-         {"restaurant-id": r, "from": d, "to": d}),
+         {"restaurant-id": r, "from": d, "to": d}, ACCEPT_V2),
         ("services (shifts + capacity)", "/services",
-         {"restaurant-id": r, "started-on": d, "only-services": "true"}),
-        ("guest search (any query)", "/people/query", {"query": q or "a"}),
-        ("notes (day notes)", "/notes", {"restaurant-id": r, "started-on": d}),
-        ("subscription-status", f"/restaurants/{r}/subscription-status", {}),
+         {"restaurant-id": r, "started-on": d, "only-services": "true"}, ACCEPT_V1),
+        ("guest search (any query)", "/people/query", {"query": q or "a"}, ACCEPT_V1),
+        ("notes (day notes)", "/notes", {"restaurant-id": r, "started-on": d}, ACCEPT_V1),
     ]
-    if q:
-        cands.append(("guest: /people/query", "/people/query", {"query": q}))
     return cands
 
 
@@ -233,7 +233,7 @@ async def main() -> int:
     import httpx
 
     headers = {
-        "Accept": ACCEPT,
+        "Accept": ACCEPT_V1,
         "Authorization": f'Token token="{token}", email="{email}"',
     }
     raw: dict = {}
@@ -243,9 +243,9 @@ async def main() -> int:
     print(f"READ-ONLY endpoint discovery on {args.base_url} (restaurant {restaurant_id}).")
     print("Trying likely path patterns; all GET, nothing is created or changed.\n")
 
-    async def get(client, label, path, params=None):
+    async def get(client, label, path, params=None, accept=ACCEPT_V1):
         try:
-            r = await client.get(path, params=params)
+            r = await client.get(path, params=params, headers={"Accept": accept})
         except Exception as exc:  # noqa: BLE001
             print(f"  [ERR ] {label}: {type(exc).__name__}")
             return None
@@ -267,8 +267,8 @@ async def main() -> int:
             return 1
 
         print("\n-- probing endpoint candidates --")
-        for label, path, params in _candidates(restaurant_id, date, party, args.query):
-            await get(client, label, path, params)
+        for label, path, params, accept in _candidates(restaurant_id, date, party, args.query):
+            await get(client, label, path, params, accept=accept)
 
         # For every JSON hit, print the (redacted) schema so we can map fields.
         if hits:

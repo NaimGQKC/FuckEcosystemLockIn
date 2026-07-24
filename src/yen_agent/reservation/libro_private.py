@@ -3,7 +3,9 @@
 Wire format confirmed from live dashboard traffic (24 Jul 2026), not guesses:
 
   Base:    https://api.libroreserve.com
-  Accept:  application/vnd.libro-private-v2+json
+  Accept:  application/vnd.libro-private-v1+json  (JSON:API endpoints)
+           application/vnd.libro-private-v2+json  (/availabilities only)
+  Content-Type on writes: application/vnd.api+json
   Auth:    Authorization: Token token="<TOKEN>", email="<EMAIL>"
 
   GET  /availabilities/{YYYY-MM-DD}?restaurant-id=8169     bookable slots (nested map)
@@ -44,11 +46,13 @@ from .errors import (
 )
 from .models import Availability, Booking, PaymentIntent, Person, TimeSlot
 
-# /availabilities requires this custom media type (plain vnd.api+json 404s it).
-# The JSON:API endpoints work with it too, as long as restaurant-id isn't sent
-# where the dashboard doesn't send it (that was the real cause of the /people
-# 404s, not the Accept header).
-ACCEPT = "application/vnd.libro-private-v2+json"
+# The API is versioned per-endpoint via the Accept header (confirmed from the
+# dashboard's own request headers): availabilities use v2, every JSON:API
+# endpoint (people/services/notes/bookings/...) uses v1, and writes send the
+# standard JSON:API content type.
+ACCEPT_V1 = "application/vnd.libro-private-v1+json"   # default (JSON:API endpoints)
+ACCEPT_V2 = "application/vnd.libro-private-v2+json"   # /availabilities only
+WRITE_CONTENT_TYPE = "application/vnd.api+json"
 #: The services/availability data caps party size at 6 (max-slots); larger = staff.
 MAX_ONLINE_PARTY = 6
 
@@ -89,17 +93,21 @@ class LibroPrivateReservationService(ReservationService):
             base_url=base_url,
             timeout=timeout,
             headers={
-                "Accept": ACCEPT,
+                "Accept": ACCEPT_V1,  # default; availabilities override to v2
                 "Authorization": f'Token token="{token}", email="{email}"',
             },
         )
 
     # -- low-level ---------------------------------------------------------
     async def _request(self, method: str, path: str, *, json: dict | None = None,
-                       params: dict | None = None):
+                       params: dict | None = None, accept: str | None = None):
         # restaurant-id is NOT auto-injected: the dashboard only sends it on
         # /availabilities, /services, /notes — adding it elsewhere can 404.
-        headers = {"Content-Type": ACCEPT} if json is not None else None
+        headers: dict = {}
+        if accept:
+            headers["Accept"] = accept
+        if json is not None:
+            headers["Content-Type"] = WRITE_CONTENT_TYPE
         resp = await self._client.request(method, path, json=json, params=params,
                                           headers=headers)
         try:
@@ -160,7 +168,8 @@ class LibroPrivateReservationService(ReservationService):
         if party_size > MAX_ONLINE_PARTY:
             raise LargePartyError()
         body = await self._request("GET", f"/availabilities/{date}",
-                                   params={"restaurant-id": self._restaurant_id})
+                                   params={"restaurant-id": self._restaurant_id},
+                                   accept=ACCEPT_V2)
         slots: list[TimeSlot] = []
         if isinstance(body, dict):
             for ts, size_map in body.items():

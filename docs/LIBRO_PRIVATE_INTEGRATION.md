@@ -15,7 +15,7 @@ a config switch. The agent, tools, and concierge are unchanged.
 |---|---|---|
 | Base URL | `api.staging.libro.app` | `https://api.libroreserve.com` |
 | Auth | OAuth bearer | `Authorization: Token token="…", email="…"` (static) |
-| Accept | `…libro-restricted-v2+json` | `application/vnd.api+json` (standard JSON:API) |
+| Accept | `…libro-restricted-v2+json` | **per-endpoint**: `…libro-private-v1+json` (JSON:API) / `…libro-private-v2+json` (/availabilities); writes send `Content-Type: application/vnd.api+json` |
 | Party size | `size` | `slots` |
 | Availability | `GET /restricted/…/seatings` | `GET /availabilities/{YYYY-MM-DD}?restaurant-id=8169` |
 | Reservation | `booking` | `POST /bookings` (JSON:API; `time` + `slots`; person+service rels) |
@@ -28,9 +28,12 @@ Endpoints (confirmed from a live dashboard HAR, 24 Jul 2026):
 `GET /people/query?query=`, `GET/POST /people`,
 `POST /bookings`, `GET/PATCH /bookings/{id}`.
 
-Everything except `/availabilities` returns `application/vnd.api+json`, and the
-key gotcha is that **the `Accept` header must be `application/vnd.api+json`** —
-the private JSON:API routes 404 with any other Accept.
+**The key gotcha is the per-endpoint API version in the `Accept` header**
+(confirmed from the dashboard's own request headers): `/availabilities/*` needs
+`application/vnd.libro-private-v2+json`, while every JSON:API endpoint
+(`/people`, `/services`, `/notes`, `/bookings`, ...) needs the **v1** media type.
+Sending v2 to a v1 endpoint (or vice-versa) returns a 404. Writes additionally
+send `Content-Type: application/vnd.api+json`.
 
 **Confirmed `POST /bookings` body** (JSON:API; the datetime is `time`, party size
 is `slots`; it references the covering `service`/shift and the `person`):

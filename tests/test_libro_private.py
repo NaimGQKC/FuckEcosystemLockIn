@@ -34,7 +34,8 @@ def test_auth_header_format():
     svc = _svc()
     auth = svc._client.headers["Authorization"]
     assert auth == 'Token token="fake-token", email="owner@example.com"'
-    assert svc._client.headers["Accept"] == "application/vnd.libro-private-v2+json"
+    # Default Accept is v1 (JSON:API endpoints); availabilities override to v2.
+    assert svc._client.headers["Accept"] == "application/vnd.libro-private-v1+json"
 
 
 def test_parse_booking_jsonapi():
@@ -81,7 +82,7 @@ async def test_availability_parses_nested_map(monkeypatch):
     """The real /availabilities/{date} returns time -> party-size -> {area: count}."""
     svc = _svc()
 
-    async def fake_request(method, path, *, json=None, params=None):
+    async def fake_request(method, path, *, json=None, params=None, accept=None):
         assert method == "GET" and path == "/availabilities/2026-07-24"
         return {
             "2026-07-24T17:15:00-04:00": {"2": {"": 17}, "4": {"": 5}, "6": {"": 1}},
@@ -103,7 +104,7 @@ async def test_service_lookup_is_non_fatal(monkeypatch):
 
     svc = _svc()
 
-    async def boom(method, path, *, json=None, params=None):
+    async def boom(method, path, *, json=None, params=None, accept=None):
         raise BookingNotFoundError()
 
     monkeypatch.setattr(svc, "_request", boom)
@@ -115,7 +116,7 @@ async def test_service_id_picks_covering_shift(monkeypatch):
     """Pick the opened service with the latest start at/before the slot time."""
     svc = _svc()
 
-    async def fake(method, path, *, json=None, params=None):
+    async def fake(method, path, *, json=None, params=None, accept=None):
         assert path == "/services"
         return {"data": [
             {"id": "L", "type": "services",
