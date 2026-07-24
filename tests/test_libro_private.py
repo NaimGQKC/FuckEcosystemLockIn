@@ -37,31 +37,73 @@ def test_auth_header_format():
     assert svc._client.headers["Accept"] == "application/vnd.libro-private-v2+json"
 
 
-def test_parse_booking_tolerates_key_variants():
+def test_parse_booking_jsonapi():
     svc = _svc()
-    # dash-case with nested person
-    b1 = svc._parse_booking({
-        "id": 555, "slots": 4, "status": "confirmed",
-        "started-at": "2026-08-15T19:00:00-04:00",
-        "person": {"id": 99}, "note": "window",
-    })
-    assert (b1.id, b1.size, b1.status, b1.person_id) == ("555", 4, "confirmed", "99")
-    assert b1.time.startswith("2026-08-15")
-
-    # camelCase with canceled status normalized to cancelled
-    b2 = svc._parse_booking({"booking": {
-        "id": 7, "slots": 2, "status": "canceled", "startedAt": "2026-08-15T18:00:00-04:00",
-        "person-id": "42",
+    # JSON:API envelope as returned by the real dashboard API.
+    b = svc._parse_booking({"data": {
+        "type": "bookings", "id": "555",
+        "attributes": {"slots": 4, "status": "approved",
+                       "time": "2026-08-15T19:00:00-04:00", "table-number": "12",
+                       "note": "window"},
+        "relationships": {
+            "person": {"data": {"type": "people", "id": "99"}},
+            "service": {"data": {"type": "services", "id": "7"}},
+        },
     }})
-    assert b2.status == "cancelled" and b2.is_cancelled and b2.person_id == "42"
+    assert (b.id, b.size, b.status, b.person_id) == ("555", 4, "approved", "99")
+    assert b.experience_id == "7"  # the service (shift) id
+    assert b.tables == ("12",)
+    assert b.time.startswith("2026-08-15")
 
 
-def test_parse_person_tolerates_key_variants():
+def test_parse_booking_normalizes_canceled():
     svc = _svc()
-    p = svc._parse_person({"firstName": "Alex", "last_name": "Kim",
-                           "formattedPhone": "(514) 555-1234", "email": "a@b.co", "id": 3})
+    b = svc._parse_booking({"data": {
+        "type": "bookings", "id": "7",
+        "attributes": {"slots": 2, "status": "canceled",
+                       "time": "2026-08-15T18:00:00-04:00"},
+    }})
+    assert b.status == "cancelled" and b.is_cancelled
+
+
+def test_parse_person_jsonapi():
+    svc = _svc()
+    p = svc._parse_person({"data": {
+        "type": "people", "id": "3",
+        "attributes": {"first-name": "Alex", "last-name": "Kim",
+                       "phone": "+15145551234", "email": "a@b.co"},
+    }})
     assert p.first_name == "Alex" and p.last_name == "Kim"
-    assert p.phone == "(514) 555-1234" and p.id == "3"
+    assert p.phone == "+15145551234" and p.id == "3"
+
+
+async def test_availability_parses_nested_map(monkeypatch):
+    """The real /availabilities/{date} returns time -> party-size -> {area: count}."""
+    svc = _svc()
+
+    async def fake_request(method, path, *, json=None, params=None):
+        assert method == "GET" and path == "/availabilities/2026-07-24"
+        return {
+            "2026-07-24T17:15:00-04:00": {"2": {"": 17}, "4": {"": 5}, "6": {"": 1}},
+            "2026-07-24T17:45:00-04:00": {"2": {"": 14}, "4": {"": 4}, "6": {}},
+        }
+
+    monkeypatch.setattr(svc, "_request", fake_request)
+    avail = await svc.check_availability("2026-07-24", 6)
+    # Party of 6 is open at 17:15 (count 1) but full at 17:45 (empty {}).
+    times = [s.time for s in avail.slots]
+    assert times == ["2026-07-24T17:15:00-04:00"]
+    assert avail.slots[0].label == "5:15 PM"
+    await svc.aclose()
+
+
+async def test_availability_large_party_escalates():
+    from yen_agent.reservation.errors import LargePartyError
+
+    svc = _svc()
+    with pytest.raises(LargePartyError):
+        await svc.check_availability("2026-07-24", 8)  # >6 = staff
+    await svc.aclose()
 
 
 def test_build_service_selects_private_backend(monkeypatch):

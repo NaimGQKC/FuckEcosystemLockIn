@@ -1,54 +1,58 @@
-"""LibroPrivateReservationService — the *private* dashboard API dialect.
+"""LibroPrivateReservationService — the real Libro dashboard API (id 8169).
 
-Based on a network analysis of dashboard.libroreserve.com (July 2026):
+Wire format confirmed from live dashboard traffic (24 Jul 2026), not guesses:
 
   Base:    https://api.libroreserve.com
   Accept:  application/vnd.libro-private-v2+json
-  Auth:    Authorization: Token token="<TOKEN>", email="<EMAIL>"   (static, long-lived)
+  Auth:    Authorization: Token token="<TOKEN>", email="<EMAIL>"
 
-  GET  /ping                          liveness
-  GET  /availabilities?restaurant-id=&started-on=YYYY-MM-DD&slots=N
-  GET  /people/query?query=<text>     guest search (name or phone)
-  POST /people                        create guest
-  POST /bookings                      create reservation ("booking", party size = `slots`)
-  GET  /bookings/:id
-  PATCH /bookings/:id                 update (incl. status -> canceled)
+  GET  /availabilities/{YYYY-MM-DD}?restaurant-id=8169     bookable slots (nested map)
+  GET  /services?restaurant-id=8169&started-on={date}      shifts + capacity (JSON:API)
+  GET  /people/query?query={text}                          guest autocomplete
+  GET/POST /people                                         guest CRUD (JSON:API)
+  POST /bookings                                            create reservation (JSON:API)
+  GET/PATCH /bookings/{id}                                 read / update / cancel
 
-IMPORTANT — payload shapes for POST /bookings and the /availabilities response
-were NOT captured live (doing so would have written to the production floor).
-The mappings below are best-effort from the app's Ember Data models and are
-concentrated in the _parse_* / _booking_payload helpers so that one capture
-pass (see scripts/probe_libro_private.py, read-only) plus one controlled test
-booking can finalize them without touching the agent above this layer.
+Availability response is a bare map, e.g.:
+  { "2026-07-24T19:30:00-04:00": { "1": {"": 17}, "4": {"": 5}, "6": {} }, ... }
+  time -> party-size(str) -> { seatingArea: count }.  Empty {} = full for that size.
 
-Security: the token is a de-facto master credential for the restaurant's
-reservations. Load it from the environment only; never log it, never commit it.
-This is also an undocumented internal API — it may change without notice
-(especially during the OpenTable migration), and official partner access
-remains the better long-term path.
+A booking's datetime is the `time` attribute (matches the availability keys),
+party size is `slots`, and it references a `person` and a `service` (shift) by
+relationship. Keys are dash-cased JSON:API.
+
+The exact required-field set / status enum for POST /bookings is the one piece
+still derived rather than observed — kept minimal here (time, slots, source,
+person, service) and confirmed by a single controlled test booking.
+
+Security: the token is a master credential (env only, never logged/committed).
+This is an undocumented internal API and may change without notice.
 """
 
 from __future__ import annotations
+
+import datetime as dt
 
 import httpx
 
 from .base import ReservationService
 from .errors import (
     BookingNotFoundError,
+    LargePartyError,
     ReservationError,
     SlotUnavailableError,
 )
 from .models import Availability, Booking, PaymentIntent, Person, TimeSlot
 
 ACCEPT = "application/vnd.libro-private-v2+json"
-#: Tag phone-agent bookings so staff can see where they came from.
 BOOKING_SOURCE = "phone-agent"
+#: The availability endpoint only exposes party sizes 1-6; larger = staff.
+MAX_ONLINE_PARTY = 6
 
 
 def _slot_label(iso_time: str) -> str:
     try:
-        hour = int(iso_time[11:13])
-        minute = iso_time[14:16]
+        hour, minute = int(iso_time[11:13]), iso_time[14:16]
     except (ValueError, IndexError):
         return iso_time
     suffix = "AM" if hour < 12 else "PM"
@@ -56,9 +60,8 @@ def _slot_label(iso_time: str) -> str:
 
 
 def _get(d: dict, *keys, default=None):
-    """Fetch the first present key — tolerates dash-case/underscore/camelCase."""
     for k in keys:
-        if k in d:
+        if isinstance(d, dict) and k in d:
             return d[k]
     return default
 
@@ -90,18 +93,19 @@ class LibroPrivateReservationService(ReservationService):
 
     # -- low-level ---------------------------------------------------------
     async def _request(self, method: str, path: str, *, json: dict | None = None,
-                       params: dict | None = None) -> dict | list:
-        resp = await self._client.request(method, path, json=json, params=params)
-        body: dict | list | None
+                       params: dict | None = None):
+        params = {"restaurant-id": self._restaurant_id, **(params or {})}
+        headers = {"Content-Type": ACCEPT} if json is not None else None
+        resp = await self._client.request(method, path, json=json, params=params,
+                                          headers=headers)
         try:
             body = resp.json()
         except ValueError:
             body = None
         if resp.status_code == 404:
             raise BookingNotFoundError(detail=str(body)[:200])
-        if resp.status_code == 422:
-            # Over-capacity / invalid slot — the concurrency case from the
-            # analysis: a walk-in may take the table between check and create.
+        if resp.status_code in (409, 422):
+            # A slot can fill between the availability check and the create.
             raise SlotUnavailableError(detail=str(body)[:200])
         if resp.status_code >= 400:
             raise ReservationError(
@@ -110,172 +114,177 @@ class LibroPrivateReservationService(ReservationService):
             )
         return body if body is not None else {}
 
-    # -- parsing (tolerant; finalize after the capture pass) ---------------
-    def _parse_booking(self, raw: dict) -> Booking:
-        b = raw.get("booking", raw) if isinstance(raw, dict) else {}
-        person = _get(b, "person", default={}) or {}
-        person_id = person.get("id", "") if isinstance(person, dict) else str(person)
-        status = str(_get(b, "status", default="")).lower()
+    # -- parsing -----------------------------------------------------------
+    def _parse_booking(self, raw) -> Booking:
+        r = raw.get("data", raw) if isinstance(raw, dict) else {}
+        attrs = r.get("attributes", {}) or {}
+        rel = r.get("relationships", {}) or {}
+
+        def _rel_id(name: str) -> str:
+            data = (rel.get(name) or {}).get("data") or {}
+            return str(data.get("id", "")) if isinstance(data, dict) else ""
+
+        status = str(attrs.get("status", "") or "").lower()
+        table = attrs.get("table-number") or ""
         return Booking(
-            id=str(_get(b, "id", default="")),
-            size=int(_get(b, "slots", "party-size", "party_size", default=0) or 0),
+            id=str(r.get("id", "")),
+            size=int(attrs.get("slots", 0) or 0),
             status="cancelled" if status in ("canceled", "cancelled") else (status or "confirmed"),
-            time=str(_get(b, "started-at", "started_at", "startedAt", "time", default="")),
+            time=str(attrs.get("time", "") or ""),
             restaurant_id=self._restaurant_id,
-            person_id=str(person_id or _get(b, "person-id", "person_id", default="")),
-            note=str(_get(b, "note", default="") or ""),
-            locale=str(_get(b, "locale", default="en") or "en"),
-            tables=tuple(
-                str(t) for t in (_get(b, "table-number", "table_number", "tableNumber",
-                                      default="") or "").split(",") if t
-            ),
+            person_id=_rel_id("person"),
+            experience_id=_rel_id("service"),
+            note=str(attrs.get("note", "") or ""),
+            locale=str(attrs.get("locale", "en") or "en"),
+            tables=tuple(t for t in str(table).split(",") if t),
         )
 
     @staticmethod
-    def _parse_person(raw: dict) -> Person:
-        p = raw.get("person", raw) if isinstance(raw, dict) else {}
+    def _parse_person(raw) -> Person:
+        r = raw.get("data", raw) if isinstance(raw, dict) else {}
+        attrs = r.get("attributes", {}) or {}
         return Person(
-            id=str(_get(p, "id", default="")),
-            first_name=str(_get(p, "first-name", "first_name", "firstName", default="") or ""),
-            last_name=str(_get(p, "last-name", "last_name", "lastName", default="") or ""),
-            phone=str(_get(p, "phone", "formatted-phone", "formattedPhone", default="") or ""),
-            email=str(_get(p, "email", default="") or ""),
+            id=str(r.get("id", "")),
+            first_name=str(attrs.get("first-name", "") or ""),
+            last_name=str(attrs.get("last-name", "") or ""),
+            phone=str(attrs.get("phone", "") or ""),
+            email=str(attrs.get("email", "") or ""),
         )
 
-    # -- ReservationService API -------------------------------------------
+    # -- availability ------------------------------------------------------
     async def check_availability(self, date: str, party_size: int) -> Availability:
-        body = await self._request(
-            "GET", "/availabilities",
-            params={
-                "restaurant-id": self._restaurant_id,
-                "started-on": date,
-                "slots": party_size,
-            },
-        )
-        # Tolerate the plausible envelope shapes until the capture pass:
-        # {"availabilities": [...]}, {"data": [...]}, or a bare list of slots.
-        if isinstance(body, dict):
-            raw_slots = _get(body, "availabilities", "data", default=[]) or []
-        else:
-            raw_slots = body or []
+        if party_size > MAX_ONLINE_PARTY:
+            raise LargePartyError()
+        body = await self._request("GET", f"/availabilities/{date}")
         slots: list[TimeSlot] = []
-        for s in raw_slots:
-            if not isinstance(s, dict):
-                continue
-            time = str(_get(s, "started-at", "started_at", "startedAt", "time", default=""))
-            if not time:
-                continue
-            slots.append(
-                TimeSlot(
-                    time=time,
-                    label=_slot_label(time),
-                    experience_id=str(_get(s, "service-id", "service_id", default="")),
-                    experience_name=str(_get(s, "service-name", "service_name",
-                                             "service", default="") or ""),
-                )
-            )
+        if isinstance(body, dict):
+            for ts, size_map in body.items():
+                if not isinstance(size_map, dict):
+                    continue
+                area = size_map.get(str(party_size))
+                count = 0
+                if isinstance(area, dict):
+                    count = sum(int(v) for v in area.values() if isinstance(v, (int, float)))
+                if count > 0:
+                    slots.append(TimeSlot(
+                        time=ts, label=_slot_label(ts),
+                        experience_id="", experience_name="", seats=party_size,
+                    ))
+        slots.sort(key=lambda s: s.time)
         return Availability(date=date, party_size=party_size, slots=slots)
 
-    async def _find_or_create_person(
-        self, *, first_name: str, last_name: str, phone: str, email: str
-    ) -> str:
-        """Return a person id, matching by phone first to avoid duplicates."""
-        if phone:
-            found = await self._request("GET", "/people/query", params={"query": phone})
-            people = found if isinstance(found, list) else \
-                _get(found, "people", "data", default=[]) or []
-            for p in people:
-                if isinstance(p, dict) and p.get("id"):
-                    return str(p["id"])
-        created = await self._request(
-            "POST", "/people",
-            json={"person": {
-                "first-name": first_name,
-                "last-name": last_name,
-                "phone": phone,
-                "email": email,
-            }},
-        )
-        return self._parse_person(created if isinstance(created, dict) else {}).id
+    async def _service_id_for_time(self, date: str, time: str) -> str:
+        """Find the shift (service) that covers ``time`` — needed to create a booking."""
+        body = await self._request("GET", "/services", params={"started-on": date})
+        services = body.get("data", []) if isinstance(body, dict) else []
+        opened = [s for s in services
+                  if str((s.get("attributes") or {}).get("status", "")).lower() == "opened"]
+        pool = opened or services
+        for s in pool:
+            a = s.get("attributes", {}) or {}
+            start, end = a.get("started-at"), a.get("expired-at")
+            if start and end and _within(start, time, end):
+                return str(s.get("id", ""))
+        return str(pool[0].get("id", "")) if pool else ""
 
+    # -- guest -------------------------------------------------------------
+    async def _find_or_create_person(self, *, first_name, last_name, phone, email,
+                                     locale="en") -> str:
+        if phone:
+            res = await self._request("GET", "/people/query", params={"query": phone})
+            people = res.get("data", []) if isinstance(res, dict) else (res or [])
+            for p in people:
+                pid = p.get("id") if isinstance(p, dict) else None
+                if pid:
+                    return str(pid)
+        payload = {"data": {"type": "people", "attributes": {
+            "first-name": first_name, "last-name": last_name,
+            "phone": phone, "phone-country": "CA", "phone-type": "mobile",
+            "email": email, "locale": locale,
+        }}}
+        body = await self._request("POST", "/people", json=payload)
+        return self._parse_person(body).id
+
+    # -- bookings ----------------------------------------------------------
     async def create_booking(
         self, *, time: str, party_size: int, first_name: str, last_name: str = "",
         phone: str = "", email: str = "", note: str = "", locale: str = "en",
         experience_id: str = "",
     ) -> Booking:
+        if party_size > MAX_ONLINE_PARTY:
+            raise LargePartyError()
         person_id = await self._find_or_create_person(
-            first_name=first_name, last_name=last_name, phone=phone, email=email
+            first_name=first_name, last_name=last_name, phone=phone,
+            email=email, locale=locale,
         )
-        payload = {
-            "booking": {
-                "restaurant-id": self._restaurant_id,
-                "started-at": time,
-                "slots": party_size,
-                "person-id": person_id,
-                "note": note,
-                "source": BOOKING_SOURCE,
-                "locale": locale,
-            }
-        }
-        if experience_id:
-            payload["booking"]["service-id"] = experience_id
+        service_id = experience_id or await self._service_id_for_time(time[:10], time)
+        attributes = {"time": time, "slots": party_size, "source": BOOKING_SOURCE}
+        if note:
+            attributes["note"] = note
+        relationships = {"person": {"data": {"type": "people", "id": person_id}}}
+        if service_id:
+            relationships["service"] = {"data": {"type": "services", "id": service_id}}
+        payload = {"data": {"type": "bookings", "attributes": attributes,
+                            "relationships": relationships}}
         body = await self._request("POST", "/bookings", json=payload)
-        return self._parse_booking(body if isinstance(body, dict) else {})
+        return self._parse_booking(body)
 
     async def get_booking(self, booking_id: str) -> Booking:
-        body = await self._request("GET", f"/bookings/{booking_id}")
-        return self._parse_booking(body if isinstance(body, dict) else {})
+        return self._parse_booking(await self._request("GET", f"/bookings/{booking_id}"))
 
     async def list_bookings(self, *, phone: str = "", person_id: str = "") -> list[Booking]:
-        params: dict = {"restaurant-id": self._restaurant_id}
-        if person_id:
-            params["person-id"] = person_id
-        elif phone:
-            # Resolve the guest first, then their bookings.
-            found = await self._request("GET", "/people/query", params={"query": phone})
-            people = found if isinstance(found, list) else \
-                _get(found, "people", "data", default=[]) or []
-            if not people:
-                return []
-            params["person-id"] = str(people[0].get("id", ""))
-        body = await self._request("GET", "/bookings", params=params)
-        raw = body if isinstance(body, list) else _get(body, "bookings", "data", default=[]) or []
-        return [self._parse_booking(b) for b in raw if isinstance(b, dict)]
+        """Best-effort: the dashboard capture didn't include a list-by-guest call,
+        so resolve the person and read their included bookings; empty on failure."""
+        if not person_id and phone:
+            res = await self._request("GET", "/people/query", params={"query": phone})
+            people = res.get("data", []) if isinstance(res, dict) else (res or [])
+            person_id = str(people[0].get("id", "")) if people else ""
+        if not person_id:
+            return []
+        try:
+            body = await self._request("GET", f"/people/{person_id}",
+                                       params={"include": "bookings"})
+        except ReservationError:
+            return []
+        included = body.get("included", []) if isinstance(body, dict) else []
+        return [self._parse_booking({"data": r}) for r in included
+                if isinstance(r, dict) and r.get("type") == "bookings"]
 
-    async def update_booking(
-        self, booking_id: str, *, party_size: int | None = None, note: str | None = None
-    ) -> Booking:
+    async def update_booking(self, booking_id: str, *, party_size: int | None = None,
+                             note: str | None = None) -> Booking:
         attrs: dict = {}
         if party_size is not None:
             attrs["slots"] = party_size
         if note is not None:
             attrs["note"] = note
-        body = await self._request(
-            "PATCH", f"/bookings/{booking_id}", json={"booking": attrs}
-        )
-        return self._parse_booking(body if isinstance(body, dict) else {})
+        payload = {"data": {"type": "bookings", "id": str(booking_id), "attributes": attrs}}
+        return self._parse_booking(
+            await self._request("PATCH", f"/bookings/{booking_id}", json=payload))
 
     async def cancel_booking(self, booking_id: str) -> Booking:
-        body = await self._request(
-            "PATCH", f"/bookings/{booking_id}", json={"booking": {"status": "canceled"}}
-        )
-        return self._parse_booking(body if isinstance(body, dict) else {})
+        payload = {"data": {"type": "bookings", "id": str(booking_id),
+                            "attributes": {"status": "canceled"}}}
+        return self._parse_booking(
+            await self._request("PATCH", f"/bookings/{booking_id}", json=payload))
 
     async def reschedule_booking(self, booking_id: str, *, new_time: str) -> Booking:
-        body = await self._request(
-            "PATCH", f"/bookings/{booking_id}", json={"booking": {"started-at": new_time}}
-        )
-        return self._parse_booking(body if isinstance(body, dict) else {})
+        service_id = await self._service_id_for_time(new_time[:10], new_time)
+        attributes = {"time": new_time}
+        payload: dict = {"data": {"type": "bookings", "id": str(booking_id),
+                                  "attributes": attributes}}
+        if service_id:
+            payload["data"]["relationships"] = {
+                "service": {"data": {"type": "services", "id": service_id}}}
+        return self._parse_booking(
+            await self._request("PATCH", f"/bookings/{booking_id}", json=payload))
 
+    # -- people ------------------------------------------------------------
     async def get_person(self, person_id: str) -> Person:
-        body = await self._request("GET", f"/people/{person_id}")
-        return self._parse_person(body if isinstance(body, dict) else {})
+        return self._parse_person(await self._request("GET", f"/people/{person_id}"))
 
-    async def update_person(
-        self, person_id: str, *, first_name: str | None = None,
-        last_name: str | None = None, phone: str | None = None, email: str | None = None,
-    ) -> Person:
-        attrs: dict = {}
+    async def update_person(self, person_id: str, *, first_name=None, last_name=None,
+                            phone=None, email=None) -> Person:
+        attrs = {}
         if first_name is not None:
             attrs["first-name"] = first_name
         if last_name is not None:
@@ -284,14 +293,12 @@ class LibroPrivateReservationService(ReservationService):
             attrs["phone"] = phone
         if email is not None:
             attrs["email"] = email
-        body = await self._request("PATCH", f"/people/{person_id}", json={"person": attrs})
-        return self._parse_person(body if isinstance(body, dict) else {})
+        payload = {"data": {"type": "people", "id": str(person_id), "attributes": attrs}}
+        return self._parse_person(
+            await self._request("PATCH", f"/people/{person_id}", json=payload))
 
-    async def init_payment_intent(
-        self, *, booking_id: str, amount: int, currency: str = "CAD"
-    ) -> PaymentIntent:
-        # Deposits go through Moneris in the private dialect; not needed for the
-        # phone-agent MVP. Surface a clear error rather than guessing.
+    async def init_payment_intent(self, *, booking_id: str, amount: int,
+                                  currency: str = "CAD") -> PaymentIntent:
         raise ReservationError(
             "Deposits are not supported via the private API adapter yet.",
             spoken_message=(
@@ -302,3 +309,13 @@ class LibroPrivateReservationService(ReservationService):
 
     async def aclose(self) -> None:
         await self._client.aclose()
+
+
+def _within(start: str, mid: str, end: str) -> bool:
+    try:
+        s = dt.datetime.fromisoformat(start)
+        m = dt.datetime.fromisoformat(mid)
+        e = dt.datetime.fromisoformat(end)
+    except ValueError:
+        return False
+    return s <= m <= e

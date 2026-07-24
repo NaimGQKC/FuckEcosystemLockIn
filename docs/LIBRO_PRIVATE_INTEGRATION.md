@@ -17,13 +17,27 @@ a config switch. The agent, tools, and concierge are unchanged.
 | Auth | OAuth bearer | `Authorization: Token token="…", email="…"` (static) |
 | Accept | `…libro-restricted-v2+json` | `…libro-private-v2+json` |
 | Party size | `size` | `slots` |
-| Availability | `GET /restricted/…/seatings` | `GET /availabilities` |
-| Reservation | `booking` | `booking` (party size = `slots`) |
-| Guest | `person` | `person` (`GET /people/query` to search) |
+| Availability | `GET /restricted/…/seatings` | `GET /availabilities/{YYYY-MM-DD}?restaurant-id=8169` |
+| Reservation | `booking` | `POST /bookings` (JSON:API; `time` + `slots`; person+service rels) |
+| Guest | `person` | `person` (`GET /people/query` to search; `POST /people` type `people`) |
 | Restaurant | rest id in path | `restaurant-id=8169` query param |
 
-Endpoints used: `GET /ping`, `GET /availabilities`, `GET /people/query`,
-`POST /people`, `POST /bookings`, `GET/PATCH /bookings/:id`.
+Endpoints (confirmed from live dashboard traffic, 24 Jul 2026):
+`GET /availabilities/{date}?restaurant-id=8169`,
+`GET /services?restaurant-id=8169&started-on={date}`,
+`GET /people/query?query=`, `GET/POST /people`,
+`POST /bookings`, `GET/PATCH /bookings/{id}`.
+
+**Availability shape** — a bare map `time → party-size → { seatingArea: count }`:
+
+```json
+{ "2026-07-24T19:30:00-04:00": { "2": {"": 14}, "4": {"": 5}, "6": {} } }
+```
+
+Empty `{}` = full for that party size at that time; a positive count = seatable.
+The endpoint only exposes party sizes **1–6**, so 7+ is treated as a large party
+(escalate to staff). A booking references the covering **service** (shift), which
+the adapter resolves from `GET /services` by the slot's time window.
 
 ## Security (read this)
 
@@ -40,24 +54,24 @@ This is an **undocumented internal API**: it can change without notice (the
 OpenTable migration makes that more likely). The adapter isolates every
 wire-format detail so a change touches one file.
 
-## Two remaining unknowns (and how to close them safely)
+## One remaining unknown (and how to close it safely)
 
-The analysis captured the endpoints and model field names, but **not** the live
-request/response bodies for `/availabilities` and `POST /bookings` — capturing
-those would have written to the production floor. The adapter's parsers are
-therefore written to tolerate the likely key spellings, and are marked to
-finalize after one capture pass.
+Reads are fully confirmed from live traffic (availability, services, guest
+search, and the booking record shape). The **only** derived piece is the exact
+*required-field set and status enum* for `POST /bookings` on a fresh create — the
+adapter sends a minimal payload (`time`, `slots`, `source`, `person`, `service`)
+and one controlled test booking confirms it.
 
-**Step 1 — read-only probe (safe, do this first):**
+**Step 1 — read-only probe (safe, confirms the reads live):**
 
 ```bash
 # credentials go in .env, never on the command line
-python scripts/probe_libro_private.py --date 2026-08-15 --party 2
+python scripts/probe_libro_private.py
 ```
 
-This calls only `GET /ping` and `GET /availabilities` (and `/people/query` with
-`--query`). It creates nothing. Share the printed JSON and we lock the
-`/availabilities` mapping to the real field names.
+Hits only the confirmed read endpoints (`/availabilities/{date}`, `/services`,
+`/notes`, and `/people/query` with `--query`). Creates nothing. The output is
+redacted (PII masked) and safe to share.
 
 **Step 2 — one controlled test booking (writes to the floor, so deliberate):**
 

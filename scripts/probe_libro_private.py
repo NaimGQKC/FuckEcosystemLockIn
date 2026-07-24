@@ -186,64 +186,20 @@ def _summary(label: str, status: int, ctype: str, body) -> str:
     return "\n".join(out)
 
 
-# Candidate endpoint templates to discover the real API surface. {r}=restaurant
-# id, {d}=date, {p}=party size, {q}=guest query. All GET, all read-only.
+# CONFIRMED read-only endpoints (from a live dashboard HAR capture, 24 Jul 2026).
+# {r}=restaurant id, {d}=date, {q}=guest query. All GET, all read-only.
 def _candidates(r: str, d: str, p: str, q: str) -> list[tuple[str, str, dict]]:
     cands = [
-        # -- context: understand account/restaurant structure --------------
-        ("context: /session", "/session", {}),
-        ("context: /me", "/me", {}),
-        ("context: /restaurants/{r}", f"/restaurants/{r}", {}),
-        ("context: /restaurant/{r} (singular)", f"/restaurant/{r}", {}),
-        ("context: /restaurants", "/restaurants", {}),
-        ("context: /restaurants/{r}/reservations", f"/restaurants/{r}/reservations", {}),
-        # -- namespaced availability (Ember/Rails often namespaces) --------
-        ("ns: /api/v2/.../availabilities", f"/api/v2/restaurants/{r}/availabilities",
-         {"started-on": d, "slots": p}),
-        ("ns: /v2/.../availabilities", f"/v2/restaurants/{r}/availabilities",
-         {"started-on": d, "slots": p}),
-        ("ns: /private/.../availabilities", f"/private/restaurants/{r}/availabilities",
-         {"started-on": d, "slots": p}),
-        ("ns: /api/.../availabilities", f"/api/restaurants/{r}/availabilities",
-         {"started-on": d, "slots": p}),
-        # -- "reservations" / "seatings" resource names -------------------
-        ("res: /restaurants/{r}/reservations?date", f"/restaurants/{r}/reservations",
-         {"started-on": d}),
-        ("res: /restaurants/{r}/seatings", f"/restaurants/{r}/seatings",
-         {"started-on": d, "slots": p}),
-        ("res: /restaurants/{r}/turns", f"/restaurants/{r}/turns",
-         {"started-on": d}),
-        ("res: /restaurants/{r}/service_periods", f"/restaurants/{r}/service_periods",
-         {"started-on": d}),
-        # -- availability --------------------------------------------------
-        ("avail: /availabilities (dash)", "/availabilities",
-         {"restaurant-id": r, "started-on": d, "slots": p}),
-        ("avail: /availabilities (underscore)", "/availabilities",
-         {"restaurant_id": r, "started_on": d, "slots": p}),
-        ("avail: /restaurants/{r}/availabilities", f"/restaurants/{r}/availabilities",
-         {"started-on": d, "slots": p}),
-        ("avail: /restaurants/{r}/availabilities?date", f"/restaurants/{r}/availabilities",
-         {"date": d, "slots": p}),
-        ("avail: /services", "/services", {"restaurant-id": r, "started-on": d}),
-        ("avail: /restaurants/{r}/services", f"/restaurants/{r}/services",
-         {"started-on": d}),
-        ("avail: /restaurants/{r}/shifts", f"/restaurants/{r}/shifts",
-         {"started-on": d}),
-        # -- bookings ------------------------------------------------------
-        ("bookings: /bookings", "/bookings", {"restaurant-id": r, "started-on": d}),
-        ("bookings: /restaurants/{r}/bookings", f"/restaurants/{r}/bookings",
-         {"started-on": d}),
-        ("bookings: /restaurants/{r}/bookings?date", f"/restaurants/{r}/bookings",
-         {"date": d}),
-        ("bookings: /reservations", "/reservations",
+        ("avail: /availabilities/{date}", f"/availabilities/{d}", {"restaurant-id": r}),
+        ("avail: /availabilities/summary", "/availabilities/summary",
+         {"restaurant-id": r, "from": d, "to": d}),
+        ("services (shifts + capacity)", "/services",
          {"restaurant-id": r, "started-on": d}),
+        ("notes (day notes)", "/notes", {"restaurant-id": r, "started-on": d}),
+        ("subscription-status", f"/restaurants/{r}/subscription-status", {}),
     ]
     if q:
-        cands += [
-            ("guest: /people/query", "/people/query", {"query": q}),
-            ("guest: /restaurants/{r}/people/query", f"/restaurants/{r}/people/query",
-             {"query": q}),
-        ]
+        cands.append(("guest: /people/query", "/people/query", {"query": q}))
     return cands
 
 
