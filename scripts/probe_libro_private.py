@@ -155,9 +155,25 @@ def redact(o, key: str = ""):
     return o  # numbers, bools, null
 
 
+def _is_json(body) -> bool:
+    return isinstance(body, (dict, list))
+
+
+def _short_nonjson(body) -> str:
+    """Collapse an HTML/text body to a one-liner (the 404 pages are huge)."""
+    s = str(body)
+    low = s.lower()
+    if "<html" in low or "<!doctype" in low:
+        for marker in ("doesn't exist", "n'existe pas", "not found", "error"):
+            if marker in low:
+                return "<HTML page — route not found / error>"
+        return "<HTML page>"
+    return s.strip().replace("\n", " ")[:120]
+
+
 def _summary(label: str, status: int, ctype: str, body) -> str:
     out = [f"\n=== {label}  (HTTP {status}, {ctype}) ==="]
-    if isinstance(body, (dict, list)):
+    if _is_json(body):
         n = len(body) if isinstance(body, list) else None
         out.append("SCHEMA (types only):")
         out.append(json.dumps(schema(body), indent=2)[:2500])
@@ -166,8 +182,49 @@ def _summary(label: str, status: int, ctype: str, body) -> str:
         if n is not None:
             out.append(f"(list length: {n})")
     else:
-        out.append(str(body)[:800])
+        out.append(_short_nonjson(body))
     return "\n".join(out)
+
+
+# Candidate endpoint templates to discover the real API surface. {r}=restaurant
+# id, {d}=date, {p}=party size, {q}=guest query. All GET, all read-only.
+def _candidates(r: str, d: str, p: str, q: str) -> list[tuple[str, str, dict]]:
+    cands = [
+        # -- context: understand account/restaurant structure --------------
+        ("context: /session", "/session", {}),
+        ("context: /me", "/me", {}),
+        ("context: /restaurants/{r}", f"/restaurants/{r}", {}),
+        ("context: /restaurants", "/restaurants", {}),
+        # -- availability --------------------------------------------------
+        ("avail: /availabilities (dash)", "/availabilities",
+         {"restaurant-id": r, "started-on": d, "slots": p}),
+        ("avail: /availabilities (underscore)", "/availabilities",
+         {"restaurant_id": r, "started_on": d, "slots": p}),
+        ("avail: /restaurants/{r}/availabilities", f"/restaurants/{r}/availabilities",
+         {"started-on": d, "slots": p}),
+        ("avail: /restaurants/{r}/availabilities?date", f"/restaurants/{r}/availabilities",
+         {"date": d, "slots": p}),
+        ("avail: /services", "/services", {"restaurant-id": r, "started-on": d}),
+        ("avail: /restaurants/{r}/services", f"/restaurants/{r}/services",
+         {"started-on": d}),
+        ("avail: /restaurants/{r}/shifts", f"/restaurants/{r}/shifts",
+         {"started-on": d}),
+        # -- bookings ------------------------------------------------------
+        ("bookings: /bookings", "/bookings", {"restaurant-id": r, "started-on": d}),
+        ("bookings: /restaurants/{r}/bookings", f"/restaurants/{r}/bookings",
+         {"started-on": d}),
+        ("bookings: /restaurants/{r}/bookings?date", f"/restaurants/{r}/bookings",
+         {"date": d}),
+        ("bookings: /reservations", "/reservations",
+         {"restaurant-id": r, "started-on": d}),
+    ]
+    if q:
+        cands += [
+            ("guest: /people/query", "/people/query", {"query": q}),
+            ("guest: /restaurants/{r}/people/query", f"/restaurants/{r}/people/query",
+             {"query": q}),
+        ]
+    return cands
 
 
 async def main() -> int:
@@ -203,48 +260,59 @@ async def main() -> int:
         "Authorization": f'Token token="{token}", email="{email}"',
     }
     raw: dict = {}
-    print(f"READ-ONLY recon of {args.base_url} (restaurant {restaurant_id}). "
-          "No data will be created or changed.\n")
+    hits: list[str] = []  # endpoints that returned real JSON
+    date = [d.strip() for d in args.dates.split(",") if d.strip()][0]
+    party = [p.strip() for p in args.parties.split(",") if p.strip()][0]
+    print(f"READ-ONLY endpoint discovery on {args.base_url} (restaurant {restaurant_id}).")
+    print("Trying likely path patterns; all GET, nothing is created or changed.\n")
 
     async def get(client, label, path, params=None):
         try:
             r = await client.get(path, params=params)
         except Exception as exc:  # noqa: BLE001
-            print(f"\n=== {label} === request failed: {type(exc).__name__}: {exc}")
+            print(f"  [ERR ] {label}: {type(exc).__name__}")
             return None
         ctype = r.headers.get("content-type", "")
         body = _safe_json(r)
-        raw[label] = {"status": r.status_code, "content_type": ctype, "body": body}
-        print(_summary(label, r.status_code, ctype, body))
+        raw[label] = {"path": path, "params": params, "status": r.status_code,
+                      "content_type": ctype, "body": body}
+        kind = "json" if _is_json(body) else ("html" if "html" in ctype.lower() else "text")
+        flag = "HIT " if (r.status_code == 200 and kind == "json") else "    "
+        print(f"  [{flag}] HTTP {r.status_code} {kind:4}  {path}  {params or ''}")
+        if r.status_code == 200 and kind == "json":
+            hits.append(label)
         return r
 
     async with httpx.AsyncClient(base_url=args.base_url, headers=headers, timeout=20) as client:
-        ping = await get(client, "GET /ping", "/ping")
+        ping = await get(client, "ping", "/ping")
         if ping is not None and ping.status_code in (401, 403):
             print("\n>>> Auth rejected (401/403). Re-check the token/email in .env.")
             return 1
 
-        for date in [d.strip() for d in args.dates.split(",") if d.strip()]:
-            for party in [p.strip() for p in args.parties.split(",") if p.strip()]:
-                await get(
-                    client, f"GET /availabilities date={date} party={party}",
-                    "/availabilities",
-                    {"restaurant-id": restaurant_id, "started-on": date, "slots": party},
-                )
+        print("\n-- probing endpoint candidates --")
+        for label, path, params in _candidates(restaurant_id, date, party, args.query):
+            await get(client, label, path, params)
 
-        # Existing bookings — learn the booking shape (redacted in console).
-        await get(client, "GET /bookings (list)", "/bookings",
-                  {"restaurant-id": restaurant_id})
-
-        if args.query:
-            await get(client, f"GET /people/query q={args.query}",
-                      "/people/query", {"query": args.query})
+        # For every JSON hit, print the (redacted) schema so we can map fields.
+        if hits:
+            print("\n===== JSON RESPONSES (redacted, safe to share) =====")
+            for label in hits:
+                entry = raw[label]
+                print(_summary(label, entry["status"], entry["content_type"], entry["body"]))
 
     # Full raw output for the owner's eyes only.
     Path(args.raw_out).write_text(json.dumps(raw, indent=2, ensure_ascii=False))
+    print("\n===== DISCOVERY SUMMARY =====")
+    if hits:
+        print(f"Found {len(hits)} working JSON endpoint(s):")
+        for label in hits:
+            print(f"  ✓ {raw[label]['path']}   ({label})")
+    else:
+        print("No candidate path returned JSON. Paste this whole output back and")
+        print("we'll widen the search (the real paths may need a different prefix).")
     print(f"\nFull raw output saved to: {args.raw_out}")
     print("  ^ contains real customer data — keep local, do NOT share or commit.")
-    print("Safe to share with the developer: the REDACTED console summary above.")
+    print("Safe to share with the developer: everything printed in THIS console.")
     print("Nothing was created or modified.")
     return 0
 
