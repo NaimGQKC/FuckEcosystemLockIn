@@ -133,6 +133,41 @@ async def test_service_id_picks_covering_shift(monkeypatch):
     await svc.aclose()
 
 
+async def test_create_booking_sends_expected_leave_at(monkeypatch):
+    """The create payload conveys the datetime as expected-leave-at (start+turn),
+    references person + service, and does NOT send a `time` attribute."""
+    svc = _svc()
+    captured: dict = {}
+
+    async def fake(method, path, *, json=None, params=None, accept=None):
+        if path == "/people/query":
+            return {"data": [{"id": "P1", "type": "people"}]}
+        if path == "/services":
+            return {"data": [{"id": "S1", "type": "services",
+                              "attributes": {"status": "opened",
+                                             "started-at": "2026-09-08T15:30:00Z"}}]}
+        if path == "/bookings" and method == "POST":
+            captured["json"] = json
+            return {"data": {"type": "bookings", "id": "B1",
+                             "attributes": {"slots": 2, "status": "approved"},
+                             "relationships": {"person": {"data": {"id": "P1"}},
+                                               "service": {"data": {"id": "S1"}}}}}
+        return {}
+
+    monkeypatch.setattr(svc, "_request", fake)
+    await svc.create_booking(time="2026-09-08T11:30:00-04:00", party_size=2,
+                             first_name="ZZ", phone="+15145550199")
+    data = captured["json"]["data"]
+    attrs = data["attributes"]
+    assert "time" not in attrs
+    assert attrs["expected-leave-at"].endswith("Z")
+    assert attrs["slots"] == 2 and attrs["status"] == "approved"
+    assert attrs["booking-type"] == "reservation"
+    assert data["relationships"]["service"]["data"]["id"] == "S1"
+    assert data["relationships"]["person"]["data"]["id"] == "P1"
+    await svc.aclose()
+
+
 async def test_availability_large_party_escalates():
     from yen_agent.reservation.errors import LargePartyError
 

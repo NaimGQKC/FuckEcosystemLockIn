@@ -55,6 +55,10 @@ ACCEPT_V2 = "application/vnd.libro-private-v2+json"   # /availabilities only
 WRITE_CONTENT_TYPE = "application/vnd.api+json"
 #: The services/availability data caps party size at 6 (max-slots); larger = staff.
 MAX_ONLINE_PARTY = 6
+#: Table turn length. The dashboard conveys the reservation via `expected-leave-at`
+#: (start + turn); the server derives the start time from it. 90 min matches the
+#: observed avg-seated-time and a live booking (start 19:45Z, leave 21:15Z).
+DEFAULT_TURN_MIN = 90
 
 
 def _slot_label(iso_time: str) -> str:
@@ -251,12 +255,22 @@ class LibroPrivateReservationService(ReservationService):
             email=email, locale=locale,
         )
         service_id = experience_id or await self._service_id_for_time(time[:10], time)
-        # Mirror the fields the dashboard sends on a create (confirmed via HAR).
+        # Mirror the fields the dashboard sends on a create (confirmed via HAR):
+        # the datetime is conveyed as expected-leave-at (start + turn), NOT `time`
+        # (which the server treats as read-only and ignores -> "select a date & time").
+        start = _parse_dt(time)
+        leave_iso = (
+            (start + dt.timedelta(minutes=DEFAULT_TURN_MIN)).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+            if start else time
+        )
         attributes = {
-            "time": time,
             "slots": party_size,
             "status": "approved",
             "booking-type": "reservation",
+            "expected-leave-at": leave_iso,
+            "children": False,
+            "reduced-mobility": False,
+            "do-not-move": False,
         }
         if note:
             attributes["note"] = note
