@@ -102,16 +102,16 @@ class LibroPrivateReservationService(ReservationService):
             body = resp.json()
         except ValueError:
             body = None
-        if resp.status_code == 404:
-            raise BookingNotFoundError(detail=str(body)[:200])
-        if resp.status_code in (409, 422):
-            # A slot can fill between the availability check and the create.
-            raise SlotUnavailableError(detail=str(body)[:200])
         if resp.status_code >= 400:
-            raise ReservationError(
-                f"Libro private API error (HTTP {resp.status_code})",
-                detail=str(body)[:200],
-            )
+            where = f"{method} {path}"
+            snippet = str(body)[:180].replace("\n", " ")
+            if resp.status_code == 404:
+                raise BookingNotFoundError(f"404 Not Found at {where}", detail=snippet)
+            if resp.status_code in (409, 422):
+                # A slot can fill between the availability check and the create.
+                raise SlotUnavailableError(f"HTTP {resp.status_code} at {where}",
+                                           detail=snippet)
+            raise ReservationError(f"HTTP {resp.status_code} at {where}", detail=snippet)
         return body if body is not None else {}
 
     # -- parsing -----------------------------------------------------------

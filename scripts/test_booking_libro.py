@@ -110,7 +110,22 @@ async def main() -> int:
         return 0
     except Exception as exc:  # noqa: BLE001
         print(f"\nERROR: {type(exc).__name__}: {exc}")
-        print("Paste this line back — it tells us the exact field/enum to fix.")
+        detail = getattr(exc, "detail", None)
+        if detail:
+            print(f"  detail: {detail}")
+        # Read-only follow-up: does the guest-search endpoint exist? This isolates
+        # whether the failure is in guest lookup vs. the booking create itself.
+        print("\nRead-only diagnostics for the write path:")
+        for label, path, params in [
+            ("GET /people/query", "/people/query", {"query": FAKE_PHONE}),
+            ("GET /people", "/people", {"query": FAKE_PHONE}),
+        ]:
+            try:
+                await svc._request("GET", path, params=params)
+                print(f"  {label}: OK (200)")
+            except Exception as e2:  # noqa: BLE001
+                print(f"  {label}: {type(e2).__name__}: {e2}")
+        print("\nPaste this whole block back — it pinpoints the exact endpoint to fix.")
         return 1
     finally:
         await svc.aclose()
