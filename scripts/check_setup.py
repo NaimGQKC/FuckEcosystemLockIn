@@ -78,11 +78,23 @@ def check_env_file() -> None:
         "LIVEKIT_API_KEY": "LiveKit Cloud → Settings → API Keys",
         "LIVEKIT_API_SECRET": "LiveKit Cloud → Settings → API Keys",
         "DEEPGRAM_API_KEY": "https://console.deepgram.com → API Keys",
-        "GOOGLE_API_KEY": "https://aistudio.google.com/apikey",
     }
-    if os.environ.get("YEN_LLM_PROVIDER", "google") == "openai":
-        required.pop("GOOGLE_API_KEY")
-        required["OPENAI_API_KEY"] = "https://platform.openai.com/api-keys"
+    llm_keys = {
+        "groq": ("GROQ_API_KEY", "https://console.groq.com/keys"),
+        "cerebras": ("CEREBRAS_API_KEY", "https://cloud.cerebras.ai"),
+        "xai": ("XAI_API_KEY", "https://console.x.ai"),
+        "openai": ("OPENAI_API_KEY", "https://platform.openai.com/api-keys"),
+        "google": ("GOOGLE_API_KEY", "https://aistudio.google.com/apikey"),
+        "livekit": (None, "(uses your LiveKit credentials)"),
+    }
+    provider = os.environ.get("YEN_LLM_PROVIDER", "groq").lower()
+    key_name, where = llm_keys.get(provider, llm_keys["groq"])
+    print(f"  (LLM provider: {provider})")
+    if key_name:
+        required[key_name] = where
+    if provider == "google":
+        warn("Google's free Gemini tier allows only ~20 requests/DAY",
+             "One voice conversation exhausts it. Prefer YEN_LLM_PROVIDER=groq.")
     if os.environ.get("YEN_TTS_PROVIDER", "deepgram") == "cartesia":
         required["CARTESIA_API_KEY"] = "https://play.cartesia.ai"
 
@@ -151,9 +163,28 @@ async def check_keys_live() -> None:
                 warn(f"Could not reach Deepgram: {type(exc).__name__}",
                      "Check your internet connection / proxy.")
 
-        # Google Gemini: list models with the key.
-        provider = os.environ.get("YEN_LLM_PROVIDER", "google")
-        if provider == "google":
+        # Groq: list models with the key (also proves the free tier is alive).
+        provider = os.environ.get("YEN_LLM_PROVIDER", "groq").lower()
+        if provider == "groq":
+            gk = os.environ.get("GROQ_API_KEY", "")
+            if _placeholder(gk):
+                warn("skipping Groq check (key not set)")
+            else:
+                try:
+                    r = await client.get(
+                        "https://api.groq.com/openai/v1/models",
+                        headers={"Authorization": f"Bearer {gk}"},
+                    )
+                    if r.status_code == 200:
+                        ok("Groq key works")
+                    elif r.status_code in (401, 403):
+                        fail("Groq key rejected",
+                             "Re-copy it from https://console.groq.com/keys")
+                    else:
+                        warn(f"Groq returned HTTP {r.status_code}")
+                except Exception as exc:
+                    warn(f"Could not reach Groq: {type(exc).__name__}")
+        elif provider == "google":
             gk = os.environ.get("GOOGLE_API_KEY", "")
             if _placeholder(gk):
                 warn("skipping Gemini check (key not set)")

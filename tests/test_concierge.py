@@ -142,6 +142,39 @@ async def test_large_party_is_spoken_as_escalation():
         await c.service.aclose()
 
 
+async def test_evening_synonym_narrows_to_dinner():
+    """The model often passes "evening"/"tonight", not the literal word "dinner"."""
+    c = await make_concierge()
+    try:
+        for phrase in ("evening", "tonight", "night"):
+            msg = await c.check_availability(date=future_date(), party_size=2,
+                                             part_of_day=phrase)
+            assert "11:30 AM" not in msg, f"{phrase!r} should exclude lunch times"
+            assert "PM" in msg
+        # And "noon" narrows to lunch — on a weekday (no Sunday lunch service).
+        import datetime as dt
+
+        weekday = dt.date.today() + dt.timedelta(days=30)
+        weekday += dt.timedelta(days=(1 - weekday.weekday()) % 7)  # next Tuesday
+        msg = await c.check_availability(date=weekday.isoformat(), party_size=2,
+                                         part_of_day="noon")
+        assert "11:30 AM" in msg
+    finally:
+        await c.service.aclose()
+
+
+async def test_unparseable_date_reuses_the_day_from_this_call():
+    c = await make_concierge()
+    try:
+        await c.check_availability(date=future_date(), party_size=2)
+        # A follow-up where the model sends something unparseable should not
+        # re-ask for the date — it reuses the day already established.
+        msg = await c.check_availability(date="that same day", party_size=4)
+        assert "what day were you thinking" not in msg.lower()
+    finally:
+        await c.service.aclose()
+
+
 async def test_merge_is_mentioned_for_large_party():
     c = await make_concierge()
     try:

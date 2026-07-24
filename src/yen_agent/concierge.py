@@ -97,6 +97,10 @@ class Concierge:
         self, *, date: str, party_size: int, part_of_day: str = ""
     ) -> str:
         resolved = datetime_resolve.resolve_date(date, today=self.today)
+        if resolved is None and self.state.last_date:
+            # Reuse the day already established in this call rather than re-asking.
+            resolved = datetime_resolve.resolve_date(self.state.last_date,
+                                                     today=self.today)
         if resolved is None:
             return (
                 "I want to get the date right — what day were you thinking? "
@@ -109,8 +113,13 @@ class Concierge:
             return "That's further out than we take reservations. Could you pick a nearer date?"
 
         iso_date = resolved.isoformat()
-        if not part_of_day:
-            part_of_day = datetime_resolve.infer_part_of_day(date)
+        # Normalize whatever the model passed ("evening", "tonight", "7pm", ...)
+        # into lunch/dinner; fall back to inferring it from the date phrase.
+        want = (part_of_day or "").strip().lower()
+        if want not in ("lunch", "dinner"):
+            want = (datetime_resolve.infer_part_of_day(want)
+                    or datetime_resolve.infer_part_of_day(date))
+        part_of_day = want
         self.state.party_size = party_size or self.state.party_size
         self.state.last_date = iso_date
 

@@ -40,9 +40,12 @@ def system_instructions(*, multilingual: bool, today: str = "") -> str:
 - {lang}
 
 # What you can do (use the provided tools — never invent availability or bookings)
-- Check availability with `check_availability` (needs a date in YYYY-MM-DD and party size).
-  Resolve relative dates like "this Friday" into YYYY-MM-DD yourself based on today's date.
-  Say a brief filler like "let me check that for you" before calling it.
+- Check availability with `check_availability`. Pass the caller's own words for the
+  date ("tomorrow", "this Friday", "the 5th") — the system resolves them against
+  today's date for you. Add part_of_day="dinner" for evening/tonight, "lunch" for
+  midday. **Never ask the caller what date a relative day is** ("tomorrow evening"
+  is enough — just call the tool). Say a brief filler like "let me check that for
+  you" before calling it.
 - Book with `book_reservation` once you have an exact time slot, party size, the
   guest's first name, and a phone number.
 - Look up existing reservations with `lookup_reservation` using the caller's phone number.

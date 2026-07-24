@@ -7,9 +7,33 @@ module requires ``livekit-agents`` (install with ``pip install -e ".[agent]"``).
 
 from __future__ import annotations
 
+import functools
+import logging
+
 from livekit.agents import Agent, function_tool
 
 from .concierge import Concierge
+
+logger = logging.getLogger("yen-agent.tools")
+
+_FALLBACK = (
+    "Sorry, I had trouble looking that up just now. Let me take a message and "
+    "the team will get right back to you."
+)
+
+
+def _safe(fn):
+    """Never let a tool exception kill the call — speak a graceful line instead."""
+
+    @functools.wraps(fn)
+    async def wrapper(*args, **kwargs):
+        try:
+            return await fn(*args, **kwargs)
+        except Exception:  # noqa: BLE001 - a live call must not crash
+            logger.exception("tool %s failed", getattr(fn, "__name__", "?"))
+            return _FALLBACK
+
+    return wrapper
 
 
 class ReservationAgent(Agent):
@@ -20,6 +44,7 @@ class ReservationAgent(Agent):
         self.concierge = concierge
 
     @function_tool
+    @_safe
     async def check_availability(
         self, date: str, party_size: int, part_of_day: str = ""
     ) -> str:
@@ -39,6 +64,7 @@ class ReservationAgent(Agent):
         )
 
     @function_tool
+    @_safe
     async def book_reservation(
         self,
         time: str,
@@ -73,6 +99,7 @@ class ReservationAgent(Agent):
         )
 
     @function_tool
+    @_safe
     async def lookup_reservation(self, phone: str) -> str:
         """Look up the caller's existing reservations by phone number.
 
@@ -82,6 +109,7 @@ class ReservationAgent(Agent):
         return await self.concierge.lookup_reservations(phone=phone)
 
     @function_tool
+    @_safe
     async def cancel_reservation(self, phone: str = "", booking_id: str = "") -> str:
         """Cancel a reservation, identified by phone number or booking id.
 
@@ -92,6 +120,7 @@ class ReservationAgent(Agent):
         return await self.concierge.cancel_reservation(phone=phone, booking_id=booking_id)
 
     @function_tool
+    @_safe
     async def reschedule_reservation(
         self, new_time: str, phone: str = "", booking_id: str = ""
     ) -> str:
@@ -107,6 +136,7 @@ class ReservationAgent(Agent):
         )
 
     @function_tool
+    @_safe
     async def answer_faq(self, topic: str) -> str:
         """Answer a common question about Yen.
 
@@ -117,6 +147,7 @@ class ReservationAgent(Agent):
         return self.concierge.answer_faq(topic=topic)
 
     @function_tool
+    @_safe
     async def take_message(self, name: str, phone: str, message: str) -> str:
         """Take a message for the restaurant team (large groups, special
         requests, complaints, or anything you can't handle directly).

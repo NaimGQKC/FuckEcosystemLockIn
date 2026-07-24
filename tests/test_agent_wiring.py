@@ -20,6 +20,7 @@ def fake_keys(monkeypatch):
     monkeypatch.setenv("DEEPGRAM_API_KEY", "fake")
     monkeypatch.setenv("GOOGLE_API_KEY", "fake")
     monkeypatch.setenv("CARTESIA_API_KEY", "fake")
+    monkeypatch.setenv("GROQ_API_KEY", "fake")  # default LLM provider
 
 
 def _build_session(settings, with_livekit_creds: bool, monkeypatch):
@@ -83,6 +84,47 @@ def test_agent_registers_all_seven_tools():
         instructions=system_instructions(multilingual=False, today="2026-07-24"),
     )
     assert len(agent.tools) == 7
+
+
+async def test_tool_exception_does_not_crash_the_call():
+    """A failing tool must speak a graceful line, never raise into the session."""
+    from yen_agent.concierge import Concierge
+    from yen_agent.prompts import system_instructions
+    from yen_agent.reservation.mock import MockReservationService
+    from yen_agent.tools import ReservationAgent
+
+    svc = MockReservationService.in_process(db_path=":memory:")
+    agent = ReservationAgent(
+        Concierge(svc),
+        instructions=system_instructions(multilingual=False, today="2026-07-24"),
+    )
+
+    async def boom(**kwargs):
+        raise RuntimeError("backend exploded")
+
+    agent.concierge.check_availability = boom
+    out = await agent.check_availability(date="tomorrow", party_size=2)
+    assert isinstance(out, str) and "trouble" in out.lower()
+    await svc.aclose()
+
+
+def test_tool_schema_survives_the_safety_wrapper():
+    """@_safe must not hide the tool signature/docstring from the LLM."""
+    import inspect
+
+    from yen_agent.concierge import Concierge
+    from yen_agent.prompts import system_instructions
+    from yen_agent.reservation.mock import MockReservationService
+    from yen_agent.tools import ReservationAgent
+
+    svc = MockReservationService.in_process(db_path=":memory:")
+    agent = ReservationAgent(
+        Concierge(svc),
+        instructions=system_instructions(multilingual=False, today="2026-07-24"),
+    )
+    params = inspect.signature(agent.check_availability).parameters
+    assert {"date", "party_size", "part_of_day"} <= set(params)
+    assert (agent.check_availability.__doc__ or "").strip()
 
 
 def test_noise_cancellation_plugin_installed():

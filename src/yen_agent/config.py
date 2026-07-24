@@ -31,7 +31,8 @@ class Settings:
     libro_private_restaurant_id: str = "8169"  # YEN Cuisine Japonaise
 
     # Voice stack
-    llm_provider: str = "google"  # google | openai
+    llm_provider: str = "groq"  # groq | cerebras | xai | openai | livekit | google
+    llm_model: str = ""  # optional override, e.g. "gpt-4o-mini"
     tts_provider: str = "deepgram"  # deepgram | cartesia
     language_mode: str = "en"  # en | multi
 
@@ -50,7 +51,8 @@ class Settings:
             libro_private_token=_env("LIBRO_PRIVATE_TOKEN"),
             libro_private_email=_env("LIBRO_PRIVATE_EMAIL"),
             libro_private_restaurant_id=_env("LIBRO_PRIVATE_RESTAURANT_ID", "8169"),
-            llm_provider=_env("YEN_LLM_PROVIDER", "google"),
+            llm_provider=_env("YEN_LLM_PROVIDER", "groq"),
+            llm_model=_env("YEN_LLM_MODEL", ""),
             tts_provider=_env("YEN_TTS_PROVIDER", "deepgram"),
             language_mode=_env("YEN_LANGUAGE_MODE", "en"),
         )

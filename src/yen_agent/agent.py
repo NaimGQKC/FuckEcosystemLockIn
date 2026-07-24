@@ -81,9 +81,41 @@ def _build_stt(settings: Settings):
 
 
 def _build_llm(settings: Settings):
-    if settings.llm_provider == "openai":
-        return openai.LLM(model="gpt-4o-mini")
-    return google.LLM(model="gemini-2.5-flash-lite")
+    """Pick the runtime LLM.
+
+    QUOTA WARNING: Google's free Gemini tier allows only ~20 requests **per day**
+    per model — a single voice conversation exhausts it and every later turn dies
+    with 429 RESOURCE_EXHAUSTED. Recommended alternatives:
+
+      groq     free: 30 req/min, ~14,400/day, no card. Sub-100ms first token —
+               the best latency for voice. OpenAI-compatible. (default)
+      cerebras free: very high daily token volume.
+      xai      xAI's Grok.
+      openai   pay-as-you-go, no daily cap.
+      livekit  routed through LiveKit Inference on your existing LiveKit key.
+      google   fine for a couple of turns only (see above).
+    """
+    provider = (settings.llm_provider or "groq").lower()
+    model = settings.llm_model
+
+    if provider == "groq":
+        # Groq exposes an OpenAI-compatible endpoint.
+        return openai.LLM(
+            model=model or "llama-3.3-70b-versatile",
+            base_url="https://api.groq.com/openai/v1",
+            api_key=os.environ.get("GROQ_API_KEY"),
+        )
+    if provider == "cerebras":
+        return openai.LLM.with_cerebras(model=model or "llama-3.3-70b")
+    if provider in ("xai", "grok"):
+        return openai.LLM.with_x_ai(model=model or "grok-3-mini")
+    if provider == "livekit":
+        from livekit.agents import inference
+
+        return inference.LLM(model=model or "google/gemini-2.5-flash-lite")
+    if provider == "openai":
+        return openai.LLM(model=model or "gpt-4o-mini")
+    return google.LLM(model=model or "gemini-2.5-flash-lite")
 
 
 def _build_tts(settings: Settings):
