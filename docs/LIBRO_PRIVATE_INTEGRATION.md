@@ -35,22 +35,41 @@ Endpoints (confirmed from a live dashboard HAR, 24 Jul 2026):
 Sending v2 to a v1 endpoint (or vice-versa) returns a 404. Writes additionally
 send `Content-Type: application/vnd.api+json`.
 
-**Confirmed `POST /bookings` body** (JSON:API; the datetime is `time`, party size
-is `slots`; it references the covering `service`/shift and the `person`):
+### The key insight: a **service IS a 15-minute seating slot**
+
+Not a shift. `GET /services` returns ~39 records for a day, one per quarter hour.
+**The reservation's date/time is derived from the referenced service** — the
+create never sends a `time` attribute (it's server-derived and read-only).
+Referencing the wrong service returns `422 code 1006 "You must select a date &
+time"`.
+
+So: match the service whose `started-at` **exactly equals** the desired slot
+instant (compare in UTC). Do **not** filter by `status` — a captured live booking
+used a service marked `"closed"` (staff can book outside online hours).
+
+**Confirmed `POST /bookings` body** (mirrors the dashboard field-for-field):
 
 ```json
 { "data": { "type": "bookings",
-  "attributes": { "time": "2026-09-08T11:30:00-04:00", "slots": 2,
-                  "status": "approved", "booking-type": "reservation" },
+  "attributes": { "slots": 2, "status": "approved",
+                  "booking-type": "reservation",
+                  "expected-leave-at": "2031-07-31T21:15:00.000Z",
+                  "quoted-wait-time": 900, "children": false,
+                  "reduced-mobility": false, "do-not-move": false,
+                  "tags": [], "answers": [], "note": "", "private-note": "" },
   "relationships": {
-    "service": { "data": { "type": "services", "id": "<serviceId>" } },
-    "person":  { "data": { "type": "people",   "id": "<personId>" } } } } }
+    "service":    { "data": { "type": "services",    "id": "<slot service id>" } },
+    "person":     { "data": { "type": "people",      "id": "<personId>" } },
+    "restaurant": { "data": { "type": "restaurants", "id": "8169" } } } } }
 ```
 
-Cancel is `PATCH /bookings/{id}` with `attributes.status = "canceled"`. The
-service (shift) is resolved from `GET /services` by picking the opened service
-with the latest start at/before the slot time (services expose `started-at` but
-`expired-at` is null).
+`expected-leave-at` = slot + **90 min** (the server's turn length, confirmed by
+comparing a created booking's `time` to its `expected-leave-at`).
+
+Cancel/update is `PATCH /bookings/{id}`: the dashboard resends the record's full
+writable attribute set, so the adapter reads the booking first and echoes it back
+with only the changed fields merged. Rescheduling means **swapping the service**
+(since the service is the slot), not editing a time.
 
 **Availability shape** — a bare map `time → party-size → { seatingArea: count }`:
 

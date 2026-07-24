@@ -112,24 +112,48 @@ async def test_service_lookup_is_non_fatal(monkeypatch):
     await svc.aclose()
 
 
-async def test_service_id_picks_covering_shift(monkeypatch):
-    """Pick the opened service with the latest start at/before the slot time."""
+async def test_service_id_requires_exact_slot_match(monkeypatch):
+    """A service IS a 15-min slot: match started-at exactly, ignoring status.
+
+    Ground truth from a captured 201 create: the booking referenced the service
+    whose started-at equalled the reservation time, and that service was marked
+    "closed".
+    """
     svc = _svc()
 
     async def fake(method, path, *, json=None, params=None, accept=None):
         assert path == "/services"
         return {"data": [
-            {"id": "L", "type": "services",
-             "attributes": {"status": "opened", "started-at": "2026-07-24T15:30:00Z"}},  # 11:30 EDT
-            {"id": "D", "type": "services",
-             "attributes": {"status": "opened", "started-at": "2026-07-24T21:00:00Z"}},  # 17:00 EDT
+            {"id": "S1130", "type": "services",
+             "attributes": {"status": "opened", "started-at": "2026-07-24T15:30:00Z"}},
+            {"id": "S1545", "type": "services",   # 'closed' but still bookable
+             "attributes": {"status": "closed", "started-at": "2026-07-24T19:45:00Z"}},
         ]}
 
     monkeypatch.setattr(svc, "_request", fake)
-    # 7 PM EDT slot -> dinner shift
-    assert await svc._service_id_for_time("2026-07-24", "2026-07-24T19:00:00-04:00") == "D"
-    # noon slot -> lunch shift
-    assert await svc._service_id_for_time("2026-07-24", "2026-07-24T12:00:00-04:00") == "L"
+    # 11:30 EDT == 15:30Z -> exact match
+    assert await svc._service_id_for_time("2026-07-24", "2026-07-24T11:30:00-04:00") == "S1130"
+    # 15:45 EDT == 19:45Z -> matches the "closed" service (staff bookings)
+    assert await svc._service_id_for_time("2026-07-24", "2026-07-24T15:45:00-04:00") == "S1545"
+    # No service at that instant -> no id (caller raises SlotUnavailable)
+    assert await svc._service_id_for_time("2026-07-24", "2026-07-24T13:07:00-04:00") == ""
+    await svc.aclose()
+
+
+async def test_create_booking_without_matching_service_raises(monkeypatch):
+    from yen_agent.reservation.errors import SlotUnavailableError
+
+    svc = _svc()
+
+    async def fake(method, path, *, json=None, params=None, accept=None):
+        if path == "/people/query":
+            return {"data": [{"id": "P1", "type": "people"}]}
+        return {"data": []}  # no services -> no slot
+
+    monkeypatch.setattr(svc, "_request", fake)
+    with pytest.raises(SlotUnavailableError):
+        await svc.create_booking(time="2026-09-08T11:30:00-04:00", party_size=2,
+                                 first_name="ZZ", phone="+15145550199")
     await svc.aclose()
 
 
@@ -143,6 +167,7 @@ async def test_create_booking_sends_expected_leave_at(monkeypatch):
         if path == "/people/query":
             return {"data": [{"id": "P1", "type": "people"}]}
         if path == "/services":
+            # 11:30 EDT == 15:30Z — the slot the booking asks for.
             return {"data": [{"id": "S1", "type": "services",
                               "attributes": {"status": "opened",
                                              "started-at": "2026-09-08T15:30:00Z"}}]}
@@ -159,12 +184,18 @@ async def test_create_booking_sends_expected_leave_at(monkeypatch):
                              first_name="ZZ", phone="+15145550199")
     data = captured["json"]["data"]
     attrs = data["attributes"]
+    assert data["type"] == "bookings"
+    # `time` is server-derived from the service and must never be sent.
     assert "time" not in attrs
-    assert attrs["expected-leave-at"].endswith("Z")
+    # 11:30 EDT + 90min turn -> 13:00 EDT == 17:00Z, dashboard's exact format.
+    assert attrs["expected-leave-at"] == "2026-09-08T17:00:00.000Z"
     assert attrs["slots"] == 2 and attrs["status"] == "approved"
     assert attrs["booking-type"] == "reservation"
-    assert data["relationships"]["service"]["data"]["id"] == "S1"
-    assert data["relationships"]["person"]["data"]["id"] == "P1"
+    assert attrs["quoted-wait-time"] == 900
+    rels = data["relationships"]
+    assert rels["service"]["data"]["id"] == "S1"
+    assert rels["person"]["data"]["id"] == "P1"
+    assert rels["restaurant"]["data"] == {"type": "restaurants", "id": "8169"}
     await svc.aclose()
 
 

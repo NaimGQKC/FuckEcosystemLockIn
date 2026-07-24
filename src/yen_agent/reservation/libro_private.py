@@ -60,6 +60,19 @@ MAX_ONLINE_PARTY = 6
 #: observed avg-seated-time and a live booking (start 19:45Z, leave 21:15Z).
 DEFAULT_TURN_MIN = 90
 
+#: Attributes the dashboard sends on a booking PATCH (everything else — `time`,
+#: `size`, `source`, lifecycle timestamps — is server-derived/read-only).
+_WRITABLE_BOOKING_ATTRS = frozenset({
+    "slots", "status", "status-tags", "seating-status", "booking-type",
+    "table-number", "note", "private-note", "children", "edit-url", "tags",
+    "reduced-mobility", "expected-leave-at", "booking-experience-id",
+    "group-number", "group-name", "group-size", "classification-counts",
+    "answers", "do-not-move", "deposit-amount", "deposit-charged",
+    "deposit-token", "no-show-fee-status", "no-show-fee-status-waived",
+    "offer-request-status", "payment-data", "quoted-wait-time",
+    "quoted-wait-time-overridden-at",
+})
+
 
 def _slot_label(iso_time: str) -> str:
     try:
@@ -192,12 +205,24 @@ class LibroPrivateReservationService(ReservationService):
         return Availability(date=date, party_size=party_size, slots=slots)
 
     async def _service_id_for_time(self, date: str, time: str) -> str:
-        """Find the shift (service) covering ``time`` — a required booking relationship.
+        """Return the service whose start EXACTLY matches ``time``.
 
-        Services expose ``started-at`` (UTC) but ``expired-at`` is null, so we pick
-        the opened service with the latest start at/before the requested time
-        (i.e. the shift the slot falls into). Non-fatal: "" on any failure.
+        Ground truth (from a captured 201 create): a "service" is one 15-minute
+        seating slot, not a shift — the day returns ~39 of them. The booking's
+        datetime is derived from the referenced service's ``started-at`` (a live
+        booking at 19:45Z referenced the service started-at 19:45Z, and `time` is
+        never sent). Referencing the wrong one yields 422 code 1006
+        "You must select a date & time".
+
+        Status is deliberately NOT filtered: that live booking used a service
+        marked "closed" (staff may book outside online hours).
+
+        ``date`` is the restaurant-local date; slots may cross into the next UTC
+        day, which the API handles.
         """
+        want = _parse_dt(time)
+        if want is None:
+            return ""
         try:
             body = await self._request("GET", "/services", params={
                 "restaurant-id": self._restaurant_id, "started-on": date,
@@ -205,24 +230,11 @@ class LibroPrivateReservationService(ReservationService):
             })
         except ReservationError:
             return ""
-        services = body.get("data", []) if isinstance(body, dict) else []
-        opened = [s for s in services
-                  if str((s.get("attributes") or {}).get("status", "")).lower() == "opened"]
-        pool = opened or services
-
-        want = _parse_dt(time)
-        best_id, best_start = "", None
-        for s in pool:
-            start = _parse_dt((s.get("attributes") or {}).get("started-at", ""))
-            if start is None:
-                continue
-            if want is not None and start > want:
-                continue  # shift starts after the reservation time
-            if best_start is None or start > best_start:
-                best_start, best_id = start, str(s.get("id", ""))
-        if best_id:
-            return best_id
-        return str(pool[0].get("id", "")) if pool else ""
+        for s in (body.get("data", []) if isinstance(body, dict) else []):
+            started = _parse_dt((s.get("attributes") or {}).get("started-at", ""))
+            if started is not None and started == want:
+                return str(s.get("id", ""))
+        return ""
 
     # -- guest -------------------------------------------------------------
     async def _find_or_create_person(self, *, first_name, last_name, phone, email,
@@ -255,30 +267,59 @@ class LibroPrivateReservationService(ReservationService):
             email=email, locale=locale,
         )
         service_id = experience_id or await self._service_id_for_time(time[:10], time)
-        # Mirror the fields the dashboard sends on a create (confirmed via HAR):
-        # the datetime is conveyed as expected-leave-at (start + turn), NOT `time`
-        # (which the server treats as read-only and ignores -> "select a date & time").
+        if not service_id:
+            # The service *is* the slot; without it the server has no date/time.
+            raise SlotUnavailableError(
+                f"No seating slot (service) at {time}",
+                detail="No service record matches that exact start time.",
+            )
         start = _parse_dt(time)
         leave_iso = (
             (start + dt.timedelta(minutes=DEFAULT_TURN_MIN)).strftime("%Y-%m-%dT%H:%M:%S.000Z")
             if start else time
         )
+        # Mirror the dashboard's captured create payload field-for-field. `time`
+        # is server-derived (from the service) and must not be sent.
         attributes = {
             "slots": party_size,
             "status": "approved",
+            "status-tags": "",
+            "seating-status": "",
             "booking-type": "reservation",
-            "expected-leave-at": leave_iso,
+            "table-number": "",
+            "note": note or "",
+            "private-note": "",
             "children": False,
+            "edit-url": None,
+            "tags": [],
             "reduced-mobility": False,
+            "expected-leave-at": leave_iso,
+            "booking-experience-id": None,
+            "group-number": None,
+            "group-name": None,
+            "group-size": None,
+            "answers": [],
             "do-not-move": False,
+            "deposit-amount": 0,
+            "deposit-charged": False,
+            "deposit-token": None,
+            "no-show-fee-status": "",
+            "no-show-fee-status-waived": "false",
+            "offer-request-status": None,
+            "payment-data": None,
+            "quoted-wait-time": 900,
+            "quoted-wait-time-overridden-at": None,
         }
-        if note:
-            attributes["note"] = note
-        relationships = {"person": {"data": {"type": "people", "id": person_id}}}
-        if service_id:
-            relationships["service"] = {"data": {"type": "services", "id": service_id}}
-        payload = {"data": {"type": "bookings", "attributes": attributes,
-                            "relationships": relationships}}
+        payload = {"data": {
+            "type": "bookings",
+            "attributes": attributes,
+            "relationships": {
+                "service": {"data": {"type": "services", "id": service_id}},
+                "person": {"data": {"type": "people", "id": person_id}},
+                "restaurant": {"data": {"type": "restaurants",
+                                        "id": self._restaurant_id}},
+            },
+        }}
         body = await self._request("POST", "/bookings", json=payload)
         return self._parse_booking(body)
 
@@ -310,26 +351,55 @@ class LibroPrivateReservationService(ReservationService):
             attrs["slots"] = party_size
         if note is not None:
             attrs["note"] = note
-        payload = {"data": {"type": "bookings", "id": str(booking_id), "attributes": attrs}}
+        return await self._patch_booking(booking_id, attrs=attrs)
+
+    async def _patch_booking(self, booking_id: str, *, attrs: dict,
+                             relationships: dict | None = None) -> Booking:
+        """Echo the booking back with changes applied, as the dashboard does.
+
+        The dashboard PATCHes the record's full attribute set, so we read the
+        current booking and resend the writable fields with our changes merged —
+        avoiding any chance of blanking server-side state with a partial update.
+        """
+        current: dict = {}
+        try:
+            got = await self._request("GET", f"/bookings/{booking_id}")
+            current = (got.get("data", {}) or {}) if isinstance(got, dict) else {}
+        except ReservationError:
+            current = {}
+        merged = {k: v for k, v in (current.get("attributes") or {}).items()
+                  if k in _WRITABLE_BOOKING_ATTRS}
+        merged.update(attrs)
+
+        rels = {k: v for k, v in (current.get("relationships") or {}).items()
+                if k in ("service", "person", "restaurant")}
+        rels.update(relationships or {})
+        rels.setdefault("restaurant", {"data": {"type": "restaurants",
+                                                "id": self._restaurant_id}})
+
+        payload = {"data": {"type": "bookings", "id": str(booking_id),
+                            "attributes": merged, "relationships": rels}}
         return self._parse_booking(
             await self._request("PATCH", f"/bookings/{booking_id}", json=payload))
 
     async def cancel_booking(self, booking_id: str) -> Booking:
-        payload = {"data": {"type": "bookings", "id": str(booking_id),
-                            "attributes": {"status": "canceled"}}}
-        return self._parse_booking(
-            await self._request("PATCH", f"/bookings/{booking_id}", json=payload))
+        return await self._patch_booking(booking_id, attrs={"status": "canceled"})
 
     async def reschedule_booking(self, booking_id: str, *, new_time: str) -> Booking:
+        # The service *is* the slot, so moving a booking means swapping services.
         service_id = await self._service_id_for_time(new_time[:10], new_time)
-        attributes = {"time": new_time}
-        payload: dict = {"data": {"type": "bookings", "id": str(booking_id),
-                                  "attributes": attributes}}
-        if service_id:
-            payload["data"]["relationships"] = {
-                "service": {"data": {"type": "services", "id": service_id}}}
-        return self._parse_booking(
-            await self._request("PATCH", f"/bookings/{booking_id}", json=payload))
+        if not service_id:
+            raise SlotUnavailableError(f"No seating slot (service) at {new_time}")
+        start = _parse_dt(new_time)
+        attrs = {}
+        if start:
+            attrs["expected-leave-at"] = (
+                start + dt.timedelta(minutes=DEFAULT_TURN_MIN)
+            ).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+        return await self._patch_booking(
+            booking_id, attrs=attrs,
+            relationships={"service": {"data": {"type": "services", "id": service_id}}},
+        )
 
     # -- people ------------------------------------------------------------
     async def get_person(self, person_id: str) -> Person:
