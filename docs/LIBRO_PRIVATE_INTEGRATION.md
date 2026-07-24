@@ -97,13 +97,21 @@ This is an **undocumented internal API**: it can change without notice (the
 OpenTable migration makes that more likely). The adapter isolates every
 wire-format detail so a change touches one file.
 
-## One remaining unknown (and how to close it safely)
+## Status: confirmed end-to-end ✅
 
-Reads are fully confirmed from live traffic (availability, services, guest
-search, and the booking record shape). The **only** derived piece is the exact
-*required-field set and status enum* for `POST /bookings` on a fresh create — the
-adapter sends a minimal payload (`time`, `slots`, `source`, `person`, `service`)
-and one controlled test booking confirms it.
+On 24 Jul 2026 the adapter completed a full **create → cancel** cycle against the
+live floor (`scripts/test_booking_libro.py --yes-write`):
+
+```
+Found 28 open slots; using 11:30 AM (2026-09-08T11:30:00-04:00)
+CREATED   booking id=111634069 status=approved time=2026-09-08T15:30:00Z
+CANCELLED status=cancelled
+```
+
+The created `time` (15:30Z) is exactly the requested slot (11:30 EDT), proving
+the service-as-slot model below. Availability, guest lookup/create, slot
+resolution, booking creation and cancellation are all verified against
+production.
 
 **Step 1 — read-only probe (safe, confirms the reads live):**
 
