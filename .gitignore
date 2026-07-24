@@ -28,6 +28,9 @@ mock_libro_data/
 libro_recon_raw.json
 libro_recon_*.json
 
+# Browser HAR captures — contain the auth token AND customer data, never commit
+*.har
+
 # Editor / OS
 .idea/
 .vscode/
