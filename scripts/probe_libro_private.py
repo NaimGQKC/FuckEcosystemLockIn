@@ -62,19 +62,66 @@ PII_HINTS = ("first", "last", "name", "phone", "email", "formatted",
              "consent", "tags")
 
 
-def _load_env() -> None:
-    try:
-        from dotenv import load_dotenv
+def _candidate_env_paths() -> list[Path]:
+    # Cover the common Windows trap where Notepad saves ".env" as ".env.txt".
+    return [
+        ROOT / ".env",
+        Path.cwd() / ".env",
+        ROOT / ".env.txt",
+        Path.cwd() / ".env.txt",
+    ]
 
-        load_dotenv(ROOT / ".env")
-    except ImportError:
-        env = ROOT / ".env"
-        if env.exists():
-            for line in env.read_text().splitlines():
-                line = line.strip()
-                if line and not line.startswith("#") and "=" in line:
-                    k, _, v = line.partition("=")
-                    os.environ.setdefault(k.strip(), v.strip())
+
+def _parse_env_file(path: Path) -> None:
+    # utf-8-sig strips a BOM that Notepad may prepend (which would corrupt the
+    # first key name). Also strip surrounding quotes from values.
+    for line in path.read_text(encoding="utf-8-sig").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        k, _, v = line.partition("=")
+        v = v.strip().strip('"').strip("'")
+        os.environ.setdefault(k.strip(), v)
+
+
+def _load_env() -> list[Path]:
+    """Load the first .env found; return the paths that existed (for diagnostics)."""
+    seen: dict[Path, None] = {}
+    for p in _candidate_env_paths():
+        if p.exists():
+            seen.setdefault(p.resolve(), None)
+    found = list(seen)
+    for path in found:
+        try:
+            _parse_env_file(path)
+        except Exception:  # noqa: BLE001 - diagnostics handle the fallout
+            pass
+    return found
+
+
+def _diagnose_env(found: list[Path]) -> None:
+    print("\n--- .env diagnostics ---")
+    print(f"Looked in: {ROOT}")
+    if not found:
+        print("  No .env file found. Create one named exactly '.env' (no .txt!) in")
+        print(f"  {ROOT}")
+        print("  Windows tip: in Notepad's 'Save as', set 'Save as type' = 'All Files'")
+        print("  and the file name to  .env  — or run in PowerShell:")
+        print('    notepad .env   (then save)   OR   ni .env  (creates it)')
+        txt = [p for p in _candidate_env_paths() if p.name == ".env.txt" and p.exists()]
+        if txt:
+            print(f"  NOTE: found {txt[0]} — rename it to '.env' (remove the .txt).")
+    else:
+        for p in found:
+            print(f"  Found: {p}")
+        present = {k: bool(os.environ.get(k)) for k in
+                   ("LIBRO_PRIVATE_TOKEN", "LIBRO_PRIVATE_EMAIL",
+                    "LIBRO_PRIVATE_RESTAURANT_ID")}
+        print("  Keys present (value hidden):")
+        for k, ok in present.items():
+            print(f"    {k}: {'SET' if ok else 'missing/empty'}")
+        print("  If a key shows 'missing/empty', check for typos in the key name,")
+        print("  a stray '#' commenting the line, or an empty value after '='.")
 
 
 def schema(o):
@@ -124,7 +171,7 @@ def _summary(label: str, status: int, ctype: str, body) -> str:
 
 
 async def main() -> int:
-    _load_env()
+    found_env = _load_env()
     parser = argparse.ArgumentParser(description="Read-only Libro private API recon.")
     default_dates = ",".join([
         (dt.date.today() + dt.timedelta(days=21)).isoformat(),
@@ -145,7 +192,8 @@ async def main() -> int:
     email = os.environ.get("LIBRO_PRIVATE_EMAIL", "")
     restaurant_id = os.environ.get("LIBRO_PRIVATE_RESTAURANT_ID", "8169")
     if not token or not email:
-        print("ERROR: set LIBRO_PRIVATE_TOKEN and LIBRO_PRIVATE_EMAIL in .env first.")
+        print("ERROR: LIBRO_PRIVATE_TOKEN and/or LIBRO_PRIVATE_EMAIL are not set.")
+        _diagnose_env(found_env)
         return 1
 
     import httpx
