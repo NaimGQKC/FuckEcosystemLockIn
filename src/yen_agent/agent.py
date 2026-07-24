@@ -23,6 +23,8 @@ from __future__ import annotations
 import datetime as dt
 import logging
 
+import os
+
 from dotenv import load_dotenv
 from livekit.agents import (
     AgentSession,
@@ -30,6 +32,7 @@ from livekit.agents import (
     JobProcess,
     MetricsCollectedEvent,
     RoomInputOptions,
+    TurnHandlingOptions,
     WorkerOptions,
     cli,
     metrics,
@@ -81,18 +84,28 @@ def _build_tts(settings: Settings):
     return deepgram.TTS(model="aura-2-thalia-en")
 
 
-def _build_turn_detection(settings: Settings):
-    try:
-        if settings.is_multilingual:
-            from livekit.plugins.turn_detector.multilingual import MultilingualModel
+def _build_turn_handling(settings: Settings) -> TurnHandlingOptions:
+    """Semantic turn detection + preemptive generation (agents SDK >= 1.6.6 API).
 
-            return MultilingualModel()
-        from livekit.plugins.turn_detector.english import EnglishModel
+    The hosted ``inference.TurnDetector`` runs on LiveKit Cloud (included on the
+    free Build tier), so it is only enabled when LiveKit credentials are present
+    — in plain ``console`` mode without a cloud project we fall back to VAD
+    turn-taking rather than fail at runtime.
+    """
 
-        return EnglishModel()
-    except Exception:  # pragma: no cover - optional model download
-        logger.warning("Turn-detector model unavailable; falling back to VAD turn-taking.")
-        return None
+    # Preemptive generation: start the LLM as soon as the caller is *likely*
+    # done, discarding the draft if they keep talking — cuts perceived latency.
+    opts = TurnHandlingOptions(preemptive_generation={"enabled": True})
+    if os.environ.get("LIVEKIT_API_KEY") and os.environ.get("LIVEKIT_URL"):
+        try:
+            from livekit.agents import inference
+
+            opts["turn_detection"] = inference.TurnDetector()
+        except Exception:  # pragma: no cover - keep the call alive regardless
+            logger.warning("Hosted turn detector unavailable; using VAD turn-taking.")
+    else:
+        logger.info("No LiveKit credentials; using VAD turn-taking (console mode).")
+    return opts
 
 
 def prewarm(proc: JobProcess) -> None:
@@ -116,20 +129,13 @@ async def entrypoint(ctx: JobContext) -> None:
     )
 
     vad = ctx.proc.userdata.get("vad") or silero.VAD.load()
-    session_kwargs = dict(
+    session = AgentSession(
         stt=_build_stt(settings),
         llm=_build_llm(settings),
         tts=_build_tts(settings),
         vad=vad,
-        # Start generating a response as soon as the caller is likely done,
-        # which cuts perceived latency; safe to keep on with turn detection.
-        preemptive_generation=True,
+        turn_handling=_build_turn_handling(settings),
     )
-    turn_detection = _build_turn_detection(settings)
-    if turn_detection is not None:
-        session_kwargs["turn_detection"] = turn_detection
-
-    session = AgentSession(**session_kwargs)
 
     # -- observability: log per-turn metrics and a usage summary at end -----
     usage = metrics.UsageCollector()

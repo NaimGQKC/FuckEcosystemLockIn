@@ -59,13 +59,15 @@ async def test_natural_language_date_is_resolved():
     from yen_agent.concierge import Concierge
     from yen_agent.reservation.mock import MockReservationService
 
-    # Pin "today" to a Wednesday so "this Friday" is deterministic and open.
+    # Use the real today so the mock's past-slot filter agrees with the resolver;
+    # "tomorrow" + dinner is always a valid future seating (dinner runs daily).
+    today = dt.date.today()
     svc = MockReservationService.in_process(db_path=":memory:")
-    c = Concierge(svc, today=dt.date(2026, 7, 1))
+    c = Concierge(svc, today=today)
     try:
-        msg = await c.check_availability(date="this Friday", party_size=2, part_of_day="dinner")
+        msg = await c.check_availability(date="tomorrow", party_size=2, part_of_day="dinner")
         assert "PM" in msg  # resolved to a real date with dinner slots
-        assert c.state.last_date == "2026-07-03"
+        assert c.state.last_date == (today + dt.timedelta(days=1)).isoformat()
     finally:
         await svc.aclose()
 
