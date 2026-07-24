@@ -163,27 +163,47 @@ async def check_keys_live() -> None:
                 warn(f"Could not reach Deepgram: {type(exc).__name__}",
                      "Check your internet connection / proxy.")
 
-        # Groq: list models with the key (also proves the free tier is alive).
+        # OpenAI-compatible providers: validate the key AND list usable models,
+        # so you never have to guess a model name that still exists.
         provider = os.environ.get("YEN_LLM_PROVIDER", "groq").lower()
-        if provider == "groq":
-            gk = os.environ.get("GROQ_API_KEY", "")
-            if _placeholder(gk):
-                warn("skipping Groq check (key not set)")
+        _compatible = {
+            "groq": ("GROQ_API_KEY", "https://api.groq.com/openai/v1/models",
+                     "https://console.groq.com/keys"),
+            "xai": ("XAI_API_KEY", "https://api.x.ai/v1/models",
+                    "https://console.x.ai"),
+            "cerebras": ("CEREBRAS_API_KEY", "https://api.cerebras.ai/v1/models",
+                         "https://cloud.cerebras.ai"),
+            "openai": ("OPENAI_API_KEY", "https://api.openai.com/v1/models",
+                       "https://platform.openai.com/api-keys"),
+        }
+        if provider in _compatible:
+            env_name, url, console = _compatible[provider]
+            key = os.environ.get(env_name, "")
+            if _placeholder(key):
+                warn(f"skipping {provider} check ({env_name} not set)")
             else:
                 try:
-                    r = await client.get(
-                        "https://api.groq.com/openai/v1/models",
-                        headers={"Authorization": f"Bearer {gk}"},
-                    )
+                    r = await client.get(url, headers={"Authorization": f"Bearer {key}"})
                     if r.status_code == 200:
-                        ok("Groq key works")
+                        ok(f"{provider} key works")
+                        try:
+                            ids = [m.get("id") for m in (r.json().get("data") or [])]
+                            ids = [i for i in ids if i][:12]
+                            if ids:
+                                print(f"         {DIM}available models: "
+                                      f"{', '.join(ids)}{END}")
+                                chosen = os.environ.get("YEN_LLM_MODEL", "")
+                                if chosen and chosen not in ids:
+                                    warn(f"YEN_LLM_MODEL='{chosen}' is not in that list",
+                                         "Set it to one of the models above.")
+                        except Exception:  # noqa: BLE001
+                            pass
                     elif r.status_code in (401, 403):
-                        fail("Groq key rejected",
-                             "Re-copy it from https://console.groq.com/keys")
+                        fail(f"{provider} key rejected", f"Re-copy it from {console}")
                     else:
-                        warn(f"Groq returned HTTP {r.status_code}")
+                        warn(f"{provider} returned HTTP {r.status_code}")
                 except Exception as exc:
-                    warn(f"Could not reach Groq: {type(exc).__name__}")
+                    warn(f"Could not reach {provider}: {type(exc).__name__}")
         elif provider == "google":
             gk = os.environ.get("GOOGLE_API_KEY", "")
             if _placeholder(gk):
@@ -203,20 +223,11 @@ async def check_keys_live() -> None:
                         warn(f"Gemini returned HTTP {r.status_code}")
                 except Exception as exc:
                     warn(f"Could not reach Google: {type(exc).__name__}")
+        elif provider == "livekit":
+            ok("LLM routed via LiveKit Inference (uses your LiveKit credentials)")
         else:
-            okey = os.environ.get("OPENAI_API_KEY", "")
-            if _placeholder(okey):
-                warn("skipping OpenAI check (key not set)")
-            else:
-                try:
-                    r = await client.get(
-                        "https://api.openai.com/v1/models",
-                        headers={"Authorization": f"Bearer {okey}"},
-                    )
-                    ok("OpenAI key works") if r.status_code == 200 else fail(
-                        f"OpenAI key rejected (HTTP {r.status_code})")
-                except Exception as exc:
-                    warn(f"Could not reach OpenAI: {type(exc).__name__}")
+            warn(f"unknown YEN_LLM_PROVIDER='{provider}'",
+                 "Use one of: groq, xai, cerebras, openai, livekit, google.")
 
     # LiveKit: mint a local access token (validates key/secret format+pairing).
     lk_key = os.environ.get("LIVEKIT_API_KEY", "")

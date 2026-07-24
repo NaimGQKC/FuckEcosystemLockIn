@@ -108,7 +108,9 @@ def _build_llm(settings: Settings):
     if provider == "cerebras":
         return openai.LLM.with_cerebras(model=model or "llama-3.3-70b")
     if provider in ("xai", "grok"):
-        return openai.LLM.with_x_ai(model=model or "grok-3-mini")
+        # xAI retired several models in 2026 — run `python scripts/check_setup.py`
+        # to list what your account can actually use, then set YEN_LLM_MODEL.
+        return openai.LLM.with_x_ai(model=model or "grok-4-1-fast-non-reasoning")
     if provider == "livekit":
         from livekit.agents import inference
 
