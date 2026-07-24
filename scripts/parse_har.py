@@ -199,8 +199,9 @@ def main() -> int:
         if info.get("headers"):
             print("     REQUEST HEADERS:", json.dumps(info["headers"])[:600])
         if isinstance(info.get("req_body"), (dict, list)):
-            print("     REQUEST BODY SCHEMA:", json.dumps(schema(info["req_body"]))[:800])
-            print("     REQUEST BODY SAMPLE:", json.dumps(redact(info["req_body"]), ensure_ascii=False)[:800])
+            # Request bodies are the create/cancel payloads (redacted) — show in
+            # full, untruncated, so no field is hidden.
+            print("     REQUEST BODY SAMPLE:", json.dumps(redact(info["req_body"]), ensure_ascii=False))
         if isinstance(info["body"], (dict, list)):
             print("     RESPONSE SCHEMA:", json.dumps(schema(info["body"]))[:600])
             print("     RESPONSE SAMPLE:", json.dumps(redact(info["body"]), ensure_ascii=False)[:600])

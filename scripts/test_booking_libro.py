@@ -113,18 +113,32 @@ async def main() -> int:
         detail = getattr(exc, "detail", None)
         if detail:
             print(f"  detail: {detail}")
-        # Read-only follow-up: does the guest-search endpoint exist? This isolates
-        # whether the failure is in guest lookup vs. the booking create itself.
+        # Read-only follow-up: isolate WHICH prerequisite is failing.
         print("\nRead-only diagnostics for the write path:")
         for label, path, params in [
             ("GET /people/query", "/people/query", {"query": FAKE_PHONE}),
-            ("GET /people", "/people", {"query": FAKE_PHONE}),
         ]:
             try:
                 await svc._request("GET", path, params=params)
                 print(f"  {label}: OK (200)")
             except Exception as e2:  # noqa: BLE001
                 print(f"  {label}: {type(e2).__name__}: {e2}")
+        # The service (shift) relationship is required — is it resolving?
+        try:
+            date = args.date
+            body = await svc._request("GET", "/services", params={
+                "restaurant-id": rid, "started-on": date, "only-services": "true"})
+            services = body.get("data", []) if isinstance(body, dict) else []
+            print(f"  GET /services: OK, {len(services)} service(s)")
+            for s in services[:4]:
+                a = s.get("attributes", {})
+                print(f"    service id={s.get('id')} status={a.get('status')} "
+                      f"started-at={a.get('started-at')}")
+            slot_t = f"{date}T11:30:00-04:00"
+            sid = await svc._service_id_for_time(date, slot_t)
+            print(f"  resolved service id for {slot_t}: {sid!r}")
+        except Exception as e3:  # noqa: BLE001
+            print(f"  GET /services: {type(e3).__name__}: {e3}")
         print("\nPaste this whole block back — it pinpoints the exact endpoint to fix.")
         return 1
     finally:
