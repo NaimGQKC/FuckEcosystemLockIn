@@ -3,7 +3,7 @@
 Wire format confirmed from live dashboard traffic (24 Jul 2026), not guesses:
 
   Base:    https://api.libroreserve.com
-  Accept:  application/vnd.api+json          (standard JSON:API — Ember Data default)
+  Accept:  application/vnd.libro-private-v2+json
   Auth:    Authorization: Token token="<TOKEN>", email="<EMAIL>"
 
   GET  /availabilities/{YYYY-MM-DD}?restaurant-id=8169     bookable slots (nested map)
@@ -44,9 +44,11 @@ from .errors import (
 )
 from .models import Availability, Booking, PaymentIntent, Person, TimeSlot
 
-# The dashboard (Ember Data) uses the standard JSON:API media type; the private
-# endpoints 404 with any other Accept. (Confirmed from live dashboard traffic.)
-ACCEPT = "application/vnd.api+json"
+# /availabilities requires this custom media type (plain vnd.api+json 404s it).
+# The JSON:API endpoints work with it too, as long as restaurant-id isn't sent
+# where the dashboard doesn't send it (that was the real cause of the /people
+# 404s, not the Accept header).
+ACCEPT = "application/vnd.libro-private-v2+json"
 #: The services/availability data caps party size at 6 (max-slots); larger = staff.
 MAX_ONLINE_PARTY = 6
 

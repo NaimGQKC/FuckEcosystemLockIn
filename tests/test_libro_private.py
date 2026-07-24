@@ -34,7 +34,7 @@ def test_auth_header_format():
     svc = _svc()
     auth = svc._client.headers["Authorization"]
     assert auth == 'Token token="fake-token", email="owner@example.com"'
-    assert svc._client.headers["Accept"] == "application/vnd.api+json"
+    assert svc._client.headers["Accept"] == "application/vnd.libro-private-v2+json"
 
 
 def test_parse_booking_jsonapi():

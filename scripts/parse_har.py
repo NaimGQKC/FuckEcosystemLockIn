@@ -57,6 +57,29 @@ PII_HINTS = ("first", "last", "name", "phone", "email", "formatted",
 STATIC_EXTS = (".js", ".css", ".png", ".jpg", ".jpeg", ".svg", ".woff",
                ".woff2", ".ico", ".gif", ".map", ".ttf")
 
+# Request-header names whose VALUES are hidden (secrets). Everything else (Accept,
+# Content-Type, X-* version/client headers) is shown — it's what makes the private
+# routes work, and contains no PII.
+SECRET_HEADER_HINTS = ("authorization", "cookie", "token", "auth", "session",
+                       "secret", "api-key", "apikey", "csrf", "xsrf")
+INTERESTING_HEADERS = ("accept", "content-type", "x-", "api", "version", "client")
+
+
+def _safe_headers(headers: list) -> dict:
+    out = {}
+    for h in headers or []:
+        name = str(h.get("name", ""))
+        low = name.lower()
+        if low.startswith(":"):  # HTTP/2 pseudo-headers
+            continue
+        if not any(tok in low for tok in INTERESTING_HEADERS):
+            continue
+        if any(s in low for s in SECRET_HEADER_HINTS):
+            out[name] = "<hidden>"
+        else:
+            out[name] = h.get("value", "")
+    return out
+
 
 def schema(o):
     if isinstance(o, dict):
@@ -159,7 +182,7 @@ def main() -> int:
         seen[key] = {
             "method": method, "host": host, "path": path, "qkeys": qkeys,
             "status": res.get("status"), "mime": mime, "body": parsed,
-            "req_body": req_body,
+            "req_body": req_body, "headers": _safe_headers(req.get("headers", [])),
         }
 
     if not seen:
@@ -173,6 +196,8 @@ def main() -> int:
         qs = f"  ?{', '.join(k for k in info['qkeys'] if k)}" if info["qkeys"] else ""
         print(f"── {info['method']} {info['path']}{qs}")
         print(f"     host={info['host']}  status={info['status']}  {info['mime']}")
+        if info.get("headers"):
+            print("     REQUEST HEADERS:", json.dumps(info["headers"])[:600])
         if isinstance(info.get("req_body"), (dict, list)):
             print("     REQUEST BODY SCHEMA:", json.dumps(schema(info["req_body"]))[:800])
             print("     REQUEST BODY SAMPLE:", json.dumps(redact(info["req_body"]), ensure_ascii=False)[:800])

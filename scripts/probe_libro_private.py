@@ -41,7 +41,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
 sys.path.insert(0, str(ROOT))
 
-ACCEPT = "application/vnd.api+json"  # standard JSON:API (Ember Data default)
+ACCEPT = "application/vnd.libro-private-v2+json"
 
 # Leaf values under these key names are shown as-is (non-PII, useful for mapping).
 SAFE_VALUE_KEYS = {
