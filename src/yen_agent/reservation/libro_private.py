@@ -174,8 +174,16 @@ class LibroPrivateReservationService(ReservationService):
         return Availability(date=date, party_size=party_size, slots=slots)
 
     async def _service_id_for_time(self, date: str, time: str) -> str:
-        """Find the shift (service) that covers ``time`` — needed to create a booking."""
-        body = await self._request("GET", "/services", params={"started-on": date})
+        """Best-effort: find the shift (service) covering ``time``.
+
+        The live capture's /services path/params weren't confirmed (it 404s with
+        the obvious params), so this is non-fatal: on any failure we return "" and
+        let the server infer the service from the booking's time + restaurant.
+        """
+        try:
+            body = await self._request("GET", "/services", params={"started-on": date})
+        except ReservationError:
+            return ""
         services = body.get("data", []) if isinstance(body, dict) else []
         opened = [s for s in services
                   if str((s.get("attributes") or {}).get("status", "")).lower() == "opened"]

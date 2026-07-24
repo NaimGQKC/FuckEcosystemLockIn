@@ -97,6 +97,20 @@ async def test_availability_parses_nested_map(monkeypatch):
     await svc.aclose()
 
 
+async def test_service_lookup_is_non_fatal(monkeypatch):
+    """If /services fails, booking still proceeds (server infers the shift)."""
+    from yen_agent.reservation.errors import BookingNotFoundError
+
+    svc = _svc()
+
+    async def boom(method, path, *, json=None, params=None):
+        raise BookingNotFoundError()
+
+    monkeypatch.setattr(svc, "_request", boom)
+    assert await svc._service_id_for_time("2026-07-24", "2026-07-24T19:30:00-04:00") == ""
+    await svc.aclose()
+
+
 async def test_availability_large_party_escalates():
     from yen_agent.reservation.errors import LargePartyError
 
