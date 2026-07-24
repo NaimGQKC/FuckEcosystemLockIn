@@ -30,6 +30,7 @@ libro_recon_*.json
 
 # Browser HAR captures — contain the auth token AND customer data, never commit
 *.har
+libro_booking_truth.json
 
 # Editor / OS
 .idea/
