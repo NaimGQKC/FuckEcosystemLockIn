@@ -24,6 +24,10 @@ htmlcov/
 *.db
 mock_libro_data/
 
+# Libro recon raw output — contains real customer data, never commit
+libro_recon_raw.json
+libro_recon_*.json
+
 # Editor / OS
 .idea/
 .vscode/

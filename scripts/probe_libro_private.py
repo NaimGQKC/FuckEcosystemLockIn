@@ -1,21 +1,25 @@
-"""READ-ONLY probe of the Libro private API — confirms the reverse-engineered shapes.
+"""READ-ONLY reconnaissance of the Libro private API.
 
-The technical analysis captured endpoints and model field names, but NOT the live
-request/response bodies for `/availabilities` and `/bookings` (capturing those
-would have written to the production floor). This script fills that gap using
-ONLY safe, read-only GET calls:
+Confirms the reverse-engineered shapes so we can finalize the adapter's field
+mappings — using ONLY safe HTTP GETs. It NEVER creates, updates, or cancels
+anything (no POST/PATCH/PUT/DELETE anywhere in this file).
 
-    GET /ping
-    GET /availabilities?restaurant-id=&started-on=&slots=
-    GET /people/query?query=<text>        (optional; needs --query)
+What it does:
+  GET /ping
+  GET /availabilities   (a couple of dates x party sizes, to see slots/services)
+  GET /bookings         (existing reservations — to learn the booking shape)
+  GET /people/query     (optional guest search; only with --query)
 
-It NEVER creates, updates, or cancels anything. It prints the raw JSON so we can
-finalize the field mappings in libro_private.py.
+Two outputs:
+  * CONSOLE — a REDACTED structural summary (field names + types + safe enum
+    values; all names/phones/emails/notes masked). Safe to share.
+  * FILE — the FULL raw JSON is written locally to --raw-out (git-ignored) for
+    YOUR reference only. It contains real customer data — do NOT share it.
 
-Usage (PowerShell / bash), with credentials in your .env (never on the CLI):
-
-    python scripts/probe_libro_private.py --date 2026-08-15 --party 2
-    python scripts/probe_libro_private.py --date 2026-08-15 --party 2 --query "514"
+Usage (credentials come from .env, never the command line):
+    python scripts/probe_libro_private.py
+    python scripts/probe_libro_private.py --dates 2026-08-15,2026-08-22 --parties 2,8
+    python scripts/probe_libro_private.py --query "514"
 
 Required in .env:
     LIBRO_PRIVATE_TOKEN=...          # the Token value (treat like a password)
@@ -27,6 +31,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import datetime as dt
 import json
 import os
 import sys
@@ -37,6 +42,24 @@ sys.path.insert(0, str(ROOT / "src"))
 sys.path.insert(0, str(ROOT))
 
 ACCEPT = "application/vnd.libro-private-v2+json"
+
+# Leaf values under these key names are shown as-is (non-PII, useful for mapping).
+SAFE_VALUE_KEYS = {
+    "id", "slots", "status", "source", "booking-type", "bookingtype",
+    "service", "service-id", "service_id", "serviceid", "service-name",
+    "started-at", "startedat", "started-on", "startedon", "expired-at",
+    "time", "date", "total-slots", "totalslots", "booked-slots", "bookedslots",
+    "occupied-slots", "occupiedslots", "slots-threshold", "bookings-count",
+    "bookingscount", "is-available-online", "isavailableonline",
+    "is-available-internally", "isavailableinternally", "force-enabled",
+    "forceenabled", "locked", "is-exceptional", "table-number", "tablenumber",
+    "do-not-move", "children", "reduced-mobility", "locale", "currency",
+    "party-size", "capacity", "count", "available", "type",
+}
+# Any key containing one of these substrings has its value masked (PII).
+PII_HINTS = ("first", "last", "name", "phone", "email", "formatted",
+             "searchdisplay", "search-display", "note", "address", "display",
+             "consent", "tags")
 
 
 def _load_env() -> None:
@@ -54,20 +77,66 @@ def _load_env() -> None:
                     os.environ.setdefault(k.strip(), v.strip())
 
 
-def _pretty(label: str, status: int, body) -> None:
-    print(f"\n=== {label}  (HTTP {status}) ===")
-    try:
-        print(json.dumps(body, indent=2, ensure_ascii=False)[:4000])
-    except (TypeError, ValueError):
-        print(str(body)[:2000])
+def schema(o):
+    """A pure type-skeleton of a JSON value (field names + types; no data)."""
+    if isinstance(o, dict):
+        return {k: schema(v) for k, v in o.items()}
+    if isinstance(o, list):
+        return [schema(o[0])] if o else []
+    return type(o).__name__
+
+
+def redact(o, key: str = ""):
+    """Structure-preserving copy with all PII masked. Safe to share."""
+    if isinstance(o, dict):
+        return {k: redact(v, k) for k, v in o.items()}
+    if isinstance(o, list):
+        # Show only the first item's (redacted) shape, note the count.
+        if not o:
+            return []
+        return [redact(o[0], key)] + ([f"<+{len(o) - 1} more>"] if len(o) > 1 else [])
+    kl = key.lower()
+    if any(h in kl for h in PII_HINTS):
+        return "<redacted>" if o not in (None, "", 0, False) else o
+    if isinstance(o, str):
+        if kl in SAFE_VALUE_KEYS:
+            return o
+        # Keep ISO timestamps/dates (useful, non-PII); mask other free text.
+        if len(o) >= 8 and o[:4].isdigit() and o[4:5] in ("-", "T", ""):
+            return o
+        return o if len(o) <= 20 and "@" not in o and " " not in o else "<redacted>"
+    return o  # numbers, bools, null
+
+
+def _summary(label: str, status: int, ctype: str, body) -> str:
+    out = [f"\n=== {label}  (HTTP {status}, {ctype}) ==="]
+    if isinstance(body, (dict, list)):
+        n = len(body) if isinstance(body, list) else None
+        out.append("SCHEMA (types only):")
+        out.append(json.dumps(schema(body), indent=2)[:2500])
+        out.append("SAMPLE (PII redacted):")
+        out.append(json.dumps(redact(body), indent=2, ensure_ascii=False)[:2500])
+        if n is not None:
+            out.append(f"(list length: {n})")
+    else:
+        out.append(str(body)[:800])
+    return "\n".join(out)
 
 
 async def main() -> int:
     _load_env()
-    parser = argparse.ArgumentParser(description="Read-only Libro private API probe.")
-    parser.add_argument("--date", required=True, help="YYYY-MM-DD to check availability for")
-    parser.add_argument("--party", type=int, default=2, help="party size (slots)")
-    parser.add_argument("--query", default="", help="optional guest search term (name/phone)")
+    parser = argparse.ArgumentParser(description="Read-only Libro private API recon.")
+    default_dates = ",".join([
+        (dt.date.today() + dt.timedelta(days=21)).isoformat(),
+        (dt.date.today() + dt.timedelta(days=25)).isoformat(),
+    ])
+    parser.add_argument("--dates", default=default_dates,
+                        help="comma-separated YYYY-MM-DD dates")
+    parser.add_argument("--parties", default="2,8",
+                        help="comma-separated party sizes")
+    parser.add_argument("--query", default="", help="optional guest search term")
+    parser.add_argument("--raw-out", default=str(ROOT / "libro_recon_raw.json"),
+                        help="local file for FULL raw output (git-ignored; do not share)")
     parser.add_argument("--base-url", default=os.environ.get(
         "LIBRO_PRIVATE_BASE_URL", "https://api.libroreserve.com"))
     args = parser.parse_args()
@@ -75,10 +144,8 @@ async def main() -> int:
     token = os.environ.get("LIBRO_PRIVATE_TOKEN", "")
     email = os.environ.get("LIBRO_PRIVATE_EMAIL", "")
     restaurant_id = os.environ.get("LIBRO_PRIVATE_RESTAURANT_ID", "8169")
-
     if not token or not email:
         print("ERROR: set LIBRO_PRIVATE_TOKEN and LIBRO_PRIVATE_EMAIL in .env first.")
-        print("       (Never put the token on the command line or in a commit.)")
         return 1
 
     import httpx
@@ -87,35 +154,50 @@ async def main() -> int:
         "Accept": ACCEPT,
         "Authorization": f'Token token="{token}", email="{email}"',
     }
-    print(f"Probing {args.base_url} as {email} (restaurant {restaurant_id}) — READ ONLY.")
+    raw: dict = {}
+    print(f"READ-ONLY recon of {args.base_url} (restaurant {restaurant_id}). "
+          "No data will be created or changed.\n")
+
+    async def get(client, label, path, params=None):
+        try:
+            r = await client.get(path, params=params)
+        except Exception as exc:  # noqa: BLE001
+            print(f"\n=== {label} === request failed: {type(exc).__name__}: {exc}")
+            return None
+        ctype = r.headers.get("content-type", "")
+        body = _safe_json(r)
+        raw[label] = {"status": r.status_code, "content_type": ctype, "body": body}
+        print(_summary(label, r.status_code, ctype, body))
+        return r
 
     async with httpx.AsyncClient(base_url=args.base_url, headers=headers, timeout=20) as client:
-        # 1) liveness + auth
-        try:
-            r = await client.get("/ping")
-            _pretty("GET /ping", r.status_code, _safe_json(r))
-            if r.status_code in (401, 403):
-                print("\n>>> Auth rejected. Re-check the token/email in .env.")
-                return 1
-        except Exception as exc:
-            print(f"Could not reach {args.base_url}: {type(exc).__name__}: {exc}")
+        ping = await get(client, "GET /ping", "/ping")
+        if ping is not None and ping.status_code in (401, 403):
+            print("\n>>> Auth rejected (401/403). Re-check the token/email in .env.")
             return 1
 
-        # 2) availability — the key unknown
-        r = await client.get("/availabilities", params={
-            "restaurant-id": restaurant_id,
-            "started-on": args.date,
-            "slots": args.party,
-        })
-        _pretty(f"GET /availabilities ({args.date}, party {args.party})", r.status_code, _safe_json(r))
+        for date in [d.strip() for d in args.dates.split(",") if d.strip()]:
+            for party in [p.strip() for p in args.parties.split(",") if p.strip()]:
+                await get(
+                    client, f"GET /availabilities date={date} party={party}",
+                    "/availabilities",
+                    {"restaurant-id": restaurant_id, "started-on": date, "slots": party},
+                )
 
-        # 3) optional guest search
+        # Existing bookings — learn the booking shape (redacted in console).
+        await get(client, "GET /bookings (list)", "/bookings",
+                  {"restaurant-id": restaurant_id})
+
         if args.query:
-            r = await client.get("/people/query", params={"query": args.query})
-            _pretty(f"GET /people/query?query={args.query}", r.status_code, _safe_json(r))
+            await get(client, f"GET /people/query q={args.query}",
+                      "/people/query", {"query": args.query})
 
-    print("\nDone. Nothing was created or modified. Share the JSON above to finalize")
-    print("the field mappings in src/yen_agent/reservation/libro_private.py.")
+    # Full raw output for the owner's eyes only.
+    Path(args.raw_out).write_text(json.dumps(raw, indent=2, ensure_ascii=False))
+    print(f"\nFull raw output saved to: {args.raw_out}")
+    print("  ^ contains real customer data — keep local, do NOT share or commit.")
+    print("Safe to share with the developer: the REDACTED console summary above.")
+    print("Nothing was created or modified.")
     return 0
 
 
