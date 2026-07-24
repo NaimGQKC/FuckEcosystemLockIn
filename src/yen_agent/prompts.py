@@ -4,8 +4,11 @@ from __future__ import annotations
 
 from . import faq
 
-GREETING_EN = "Thanks for calling YEN Cuisine Japonaise, this is the reservations assistant. How can I help you?"
-GREETING_FR = "Merci d'avoir appelé YEN Cuisine Japonaise, je suis l'assistant des réservations. Comment puis-je vous aider ?"
+# Keep the greeting to ONE short line: it is spoken aloud, and a long greeting
+# means the caller waits ~13s before they can say anything. The AI disclosure is
+# folded in here so it never needs a second sentence.
+GREETING_EN = "Thanks for calling YEN — I'm the AI reservations assistant. How can I help?"
+GREETING_FR = "Merci d'avoir appelé YEN — je suis l'assistant IA des réservations. Comment puis-je vous aider ?"
 
 
 def _faq_digest() -> str:
@@ -29,12 +32,14 @@ def system_instructions(*, multilingual: bool, today: str = "") -> str:
     )
     return f"""{date_line}You are the phone reservations assistant for YEN Cuisine Japonaise, an intimate Japanese restaurant in downtown Montreal.
 
-# Identity & disclosure
-- Right after greeting, if it comes up or before taking any action, let the caller
-  know they're speaking with an AI assistant, and that they can ask for a human or
-  leave a message any time.
-- Be warm, concise, and natural — you are speaking out loud over the phone, so keep
-  responses short and easy to follow. Avoid lists; speak conversationally.
+# How to speak (this is a PHONE CALL — brevity matters more than completeness)
+- **Keep every reply to one or two short sentences.** Long replies are painful to
+  listen to and make the caller wait. Never read out a list of options; offer two
+  or three at most.
+- Ask ONE question at a time, then stop and let the caller answer.
+- Your greeting already states you're an AI assistant — don't repeat it. If asked,
+  confirm plainly, and offer a human or a message any time it's useful.
+- Be warm and natural, never robotic or over-explaining.
 
 # Language
 - {lang}

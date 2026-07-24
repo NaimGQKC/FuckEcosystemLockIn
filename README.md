@@ -158,14 +158,30 @@ English-first MVP, each layer swappable via `.env`:
 | TTS | Deepgram Aura-2 (`en`) | switch to Cartesia Sonic for French |
 | Telephony (Phase 2) | Twilio Canadian local number → LiveKit SIP | LiveKit phone numbers are US-only |
 
-### Enabling French
+### Enabling French (auto-detected, including Québec French)
 
 ```dotenv
 YEN_LANGUAGE_MODE=multi      # Nova-3 Multilingual STT + French greeting/locale
-YEN_TTS_PROVIDER=cartesia    # Sonic for native French TTS
+YEN_TTS_PROVIDER=cartesia    # Sonic for native French TTS (+ CARTESIA_API_KEY)
 ```
 
-No architecture change — the agent detects the caller's language and responds in kind.
+No architecture change — the agent detects the caller's language from their first
+words and responds in kind, and can switch mid-call.
+
+**What auto-detection actually covers.** Deepgram Nova-3's real-time
+code-switching supports exactly **10 languages**: English, Spanish, French,
+German, Hindi, Russian, Portuguese, Japanese, Italian, Dutch. So:
+
+| Language | Auto-detect + switch? |
+|---|---|
+| English | ✅ |
+| French (incl. Québécois) | ✅ — Québec accent/idiom may cost some accuracy vs. Metropolitan French; worth testing with real callers |
+| Spanish, German, Italian, Portuguese, … | ✅ (in the 10) |
+| **Chinese (Mandarin/Cantonese)** | ❌ **not** in the code-switching set |
+
+Chinese would need a different approach — either pinning STT to Chinese for a
+dedicated line (losing auto-detect), or a different STT provider. Don't promise
+trilingual EN/FR/ZH auto-switching on this stack without testing that path first.
 
 ## How the agent reasons about tables
 

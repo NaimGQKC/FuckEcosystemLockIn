@@ -206,7 +206,8 @@ async def entrypoint(ctx: JobContext) -> None:
     await ctx.connect()
 
     greeting = GREETING_FR if settings.is_multilingual else GREETING_EN
-    await session.generate_reply(instructions=f"Greet the caller with: {greeting}")
+    # say_verbatim: the model otherwise pads the greeting into a ~13s monologue.
+    await session.say(greeting, allow_interruptions=True)
 
 
 def main() -> None:
