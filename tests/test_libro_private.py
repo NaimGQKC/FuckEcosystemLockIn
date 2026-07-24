@@ -34,7 +34,7 @@ def test_auth_header_format():
     svc = _svc()
     auth = svc._client.headers["Authorization"]
     assert auth == 'Token token="fake-token", email="owner@example.com"'
-    assert svc._client.headers["Accept"] == "application/vnd.libro-private-v2+json"
+    assert svc._client.headers["Accept"] == "application/vnd.api+json"
 
 
 def test_parse_booking_jsonapi():
@@ -108,6 +108,27 @@ async def test_service_lookup_is_non_fatal(monkeypatch):
 
     monkeypatch.setattr(svc, "_request", boom)
     assert await svc._service_id_for_time("2026-07-24", "2026-07-24T19:30:00-04:00") == ""
+    await svc.aclose()
+
+
+async def test_service_id_picks_covering_shift(monkeypatch):
+    """Pick the opened service with the latest start at/before the slot time."""
+    svc = _svc()
+
+    async def fake(method, path, *, json=None, params=None):
+        assert path == "/services"
+        return {"data": [
+            {"id": "L", "type": "services",
+             "attributes": {"status": "opened", "started-at": "2026-07-24T15:30:00Z"}},  # 11:30 EDT
+            {"id": "D", "type": "services",
+             "attributes": {"status": "opened", "started-at": "2026-07-24T21:00:00Z"}},  # 17:00 EDT
+        ]}
+
+    monkeypatch.setattr(svc, "_request", fake)
+    # 7 PM EDT slot -> dinner shift
+    assert await svc._service_id_for_time("2026-07-24", "2026-07-24T19:00:00-04:00") == "D"
+    # noon slot -> lunch shift
+    assert await svc._service_id_for_time("2026-07-24", "2026-07-24T12:00:00-04:00") == "L"
     await svc.aclose()
 
 

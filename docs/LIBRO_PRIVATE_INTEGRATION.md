@@ -15,18 +15,39 @@ a config switch. The agent, tools, and concierge are unchanged.
 |---|---|---|
 | Base URL | `api.staging.libro.app` | `https://api.libroreserve.com` |
 | Auth | OAuth bearer | `Authorization: Token token="…", email="…"` (static) |
-| Accept | `…libro-restricted-v2+json` | `…libro-private-v2+json` |
+| Accept | `…libro-restricted-v2+json` | `application/vnd.api+json` (standard JSON:API) |
 | Party size | `size` | `slots` |
 | Availability | `GET /restricted/…/seatings` | `GET /availabilities/{YYYY-MM-DD}?restaurant-id=8169` |
 | Reservation | `booking` | `POST /bookings` (JSON:API; `time` + `slots`; person+service rels) |
 | Guest | `person` | `person` (`GET /people/query` to search; `POST /people` type `people`) |
 | Restaurant | rest id in path | `restaurant-id=8169` query param |
 
-Endpoints (confirmed from live dashboard traffic, 24 Jul 2026):
+Endpoints (confirmed from a live dashboard HAR, 24 Jul 2026):
 `GET /availabilities/{date}?restaurant-id=8169`,
-`GET /services?restaurant-id=8169&started-on={date}`,
+`GET /services?restaurant-id=8169&started-on={date}&only-services=true`,
 `GET /people/query?query=`, `GET/POST /people`,
 `POST /bookings`, `GET/PATCH /bookings/{id}`.
+
+Everything except `/availabilities` returns `application/vnd.api+json`, and the
+key gotcha is that **the `Accept` header must be `application/vnd.api+json`** —
+the private JSON:API routes 404 with any other Accept.
+
+**Confirmed `POST /bookings` body** (JSON:API; the datetime is `time`, party size
+is `slots`; it references the covering `service`/shift and the `person`):
+
+```json
+{ "data": { "type": "bookings",
+  "attributes": { "time": "2026-09-08T11:30:00-04:00", "slots": 2,
+                  "status": "approved", "booking-type": "reservation" },
+  "relationships": {
+    "service": { "data": { "type": "services", "id": "<serviceId>" } },
+    "person":  { "data": { "type": "people",   "id": "<personId>" } } } } }
+```
+
+Cancel is `PATCH /bookings/{id}` with `attributes.status = "canceled"`. The
+service (shift) is resolved from `GET /services` by picking the opened service
+with the latest start at/before the slot time (services expose `started-at` but
+`expired-at` is null).
 
 **Availability shape** — a bare map `time → party-size → { seatingArea: count }`:
 

@@ -3,7 +3,7 @@
 Wire format confirmed from live dashboard traffic (24 Jul 2026), not guesses:
 
   Base:    https://api.libroreserve.com
-  Accept:  application/vnd.libro-private-v2+json
+  Accept:  application/vnd.api+json          (standard JSON:API — Ember Data default)
   Auth:    Authorization: Token token="<TOKEN>", email="<EMAIL>"
 
   GET  /availabilities/{YYYY-MM-DD}?restaurant-id=8169     bookable slots (nested map)
@@ -44,9 +44,10 @@ from .errors import (
 )
 from .models import Availability, Booking, PaymentIntent, Person, TimeSlot
 
-ACCEPT = "application/vnd.libro-private-v2+json"
-BOOKING_SOURCE = "phone-agent"
-#: The availability endpoint only exposes party sizes 1-6; larger = staff.
+# The dashboard (Ember Data) uses the standard JSON:API media type; the private
+# endpoints 404 with any other Accept. (Confirmed from live dashboard traffic.)
+ACCEPT = "application/vnd.api+json"
+#: The services/availability data caps party size at 6 (max-slots); larger = staff.
 MAX_ONLINE_PARTY = 6
 
 
@@ -94,7 +95,8 @@ class LibroPrivateReservationService(ReservationService):
     # -- low-level ---------------------------------------------------------
     async def _request(self, method: str, path: str, *, json: dict | None = None,
                        params: dict | None = None):
-        params = {"restaurant-id": self._restaurant_id, **(params or {})}
+        # restaurant-id is NOT auto-injected: the dashboard only sends it on
+        # /availabilities, /services, /notes — adding it elsewhere can 404.
         headers = {"Content-Type": ACCEPT} if json is not None else None
         resp = await self._client.request(method, path, json=json, params=params,
                                           headers=headers)
@@ -155,7 +157,8 @@ class LibroPrivateReservationService(ReservationService):
     async def check_availability(self, date: str, party_size: int) -> Availability:
         if party_size > MAX_ONLINE_PARTY:
             raise LargePartyError()
-        body = await self._request("GET", f"/availabilities/{date}")
+        body = await self._request("GET", f"/availabilities/{date}",
+                                   params={"restaurant-id": self._restaurant_id})
         slots: list[TimeSlot] = []
         if isinstance(body, dict):
             for ts, size_map in body.items():
@@ -174,25 +177,36 @@ class LibroPrivateReservationService(ReservationService):
         return Availability(date=date, party_size=party_size, slots=slots)
 
     async def _service_id_for_time(self, date: str, time: str) -> str:
-        """Best-effort: find the shift (service) covering ``time``.
+        """Find the shift (service) covering ``time`` — a required booking relationship.
 
-        The live capture's /services path/params weren't confirmed (it 404s with
-        the obvious params), so this is non-fatal: on any failure we return "" and
-        let the server infer the service from the booking's time + restaurant.
+        Services expose ``started-at`` (UTC) but ``expired-at`` is null, so we pick
+        the opened service with the latest start at/before the requested time
+        (i.e. the shift the slot falls into). Non-fatal: "" on any failure.
         """
         try:
-            body = await self._request("GET", "/services", params={"started-on": date})
+            body = await self._request("GET", "/services", params={
+                "restaurant-id": self._restaurant_id, "started-on": date,
+                "only-services": "true",
+            })
         except ReservationError:
             return ""
         services = body.get("data", []) if isinstance(body, dict) else []
         opened = [s for s in services
                   if str((s.get("attributes") or {}).get("status", "")).lower() == "opened"]
         pool = opened or services
+
+        want = _parse_dt(time)
+        best_id, best_start = "", None
         for s in pool:
-            a = s.get("attributes", {}) or {}
-            start, end = a.get("started-at"), a.get("expired-at")
-            if start and end and _within(start, time, end):
-                return str(s.get("id", ""))
+            start = _parse_dt((s.get("attributes") or {}).get("started-at", ""))
+            if start is None:
+                continue
+            if want is not None and start > want:
+                continue  # shift starts after the reservation time
+            if best_start is None or start > best_start:
+                best_start, best_id = start, str(s.get("id", ""))
+        if best_id:
+            return best_id
         return str(pool[0].get("id", "")) if pool else ""
 
     # -- guest -------------------------------------------------------------
@@ -226,7 +240,13 @@ class LibroPrivateReservationService(ReservationService):
             email=email, locale=locale,
         )
         service_id = experience_id or await self._service_id_for_time(time[:10], time)
-        attributes = {"time": time, "slots": party_size, "source": BOOKING_SOURCE}
+        # Mirror the fields the dashboard sends on a create (confirmed via HAR).
+        attributes = {
+            "time": time,
+            "slots": party_size,
+            "status": "approved",
+            "booking-type": "reservation",
+        }
         if note:
             attributes["note"] = note
         relationships = {"person": {"data": {"type": "people", "id": person_id}}}
@@ -319,11 +339,14 @@ class LibroPrivateReservationService(ReservationService):
         await self._client.aclose()
 
 
-def _within(start: str, mid: str, end: str) -> bool:
+def _parse_dt(value: str) -> dt.datetime | None:
+    """Parse an ISO-8601 timestamp (handles the trailing 'Z') into aware UTC."""
+    if not value:
+        return None
     try:
-        s = dt.datetime.fromisoformat(start)
-        m = dt.datetime.fromisoformat(mid)
-        e = dt.datetime.fromisoformat(end)
+        d = dt.datetime.fromisoformat(str(value).replace("Z", "+00:00"))
     except ValueError:
-        return False
-    return s <= m <= e
+        return None
+    if d.tzinfo is None:
+        d = d.replace(tzinfo=dt.timezone.utc)
+    return d.astimezone(dt.timezone.utc)

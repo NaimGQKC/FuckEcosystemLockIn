@@ -41,7 +41,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
 sys.path.insert(0, str(ROOT))
 
-ACCEPT = "application/vnd.libro-private-v2+json"
+ACCEPT = "application/vnd.api+json"  # standard JSON:API (Ember Data default)
 
 # Leaf values under these key names are shown as-is (non-PII, useful for mapping).
 SAFE_VALUE_KEYS = {
@@ -194,7 +194,8 @@ def _candidates(r: str, d: str, p: str, q: str) -> list[tuple[str, str, dict]]:
         ("avail: /availabilities/summary", "/availabilities/summary",
          {"restaurant-id": r, "from": d, "to": d}),
         ("services (shifts + capacity)", "/services",
-         {"restaurant-id": r, "started-on": d}),
+         {"restaurant-id": r, "started-on": d, "only-services": "true"}),
+        ("guest search (any query)", "/people/query", {"query": q or "a"}),
         ("notes (day notes)", "/notes", {"restaurant-id": r, "started-on": d}),
         ("subscription-status", f"/restaurants/{r}/subscription-status", {}),
     ]
