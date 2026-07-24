@@ -61,6 +61,16 @@ def build_service(settings=None):
             restaurant_id=settings.restaurant_id,
         )
 
+    if backend == "libro-private":
+        from .libro_private import LibroPrivateReservationService
+
+        return LibroPrivateReservationService(
+            token=settings.libro_private_token,
+            email=settings.libro_private_email,
+            restaurant_id=settings.libro_private_restaurant_id,
+            base_url=settings.libro_private_base_url,
+        )
+
     if backend == "libro":
         from .libro import LibroReservationService
 

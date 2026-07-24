@@ -89,3 +89,27 @@ def test_noise_cancellation_plugin_installed():
     from livekit.plugins import noise_cancellation
 
     assert hasattr(noise_cancellation, "BVC")
+
+
+def test_builders_work_off_main_thread(monkeypatch):
+    """Regression: LiveKit registers plugins at import and requires the main
+    thread. Building STT/LLM/TTS from a worker thread (as the job runner does)
+    must not raise "Plugins must be registered on the main thread" — i.e. all
+    plugin imports must live at module top level, not inside the builders.
+    """
+    import concurrent.futures as cf
+
+    from yen_agent import agent as A
+    from yen_agent.config import Settings
+
+    def build():
+        s = Settings()
+        return (
+            type(A._build_stt(s)).__name__,
+            type(A._build_llm(s)).__name__,
+            type(A._build_tts(s)).__name__,
+        )
+
+    with cf.ThreadPoolExecutor(max_workers=1) as ex:
+        stt, llm, tts = ex.submit(build).result()
+    assert (stt, llm, tts) == ("STT", "LLM", "TTS")

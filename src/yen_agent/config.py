@@ -18,11 +18,17 @@ class Settings:
     mock_base_url: str = "http://localhost:8000"
     mock_db_path: str = ":memory:"
 
-    # Real Libro (Phase 3)
+    # Real Libro — partner OAuth dialect (Phase 3, if ever granted)
     libro_base_url: str = "https://api.staging.libro.app"
     libro_client_id: str = ""
     libro_client_secret: str = ""
     libro_restaurant_id: str = ""
+
+    # Real Libro — private dashboard dialect (token auth). This is the live path.
+    libro_private_base_url: str = "https://api.libroreserve.com"
+    libro_private_token: str = ""
+    libro_private_email: str = ""
+    libro_private_restaurant_id: str = "8169"  # YEN Cuisine Japonaise
 
     # Voice stack
     llm_provider: str = "google"  # google | openai
@@ -40,6 +46,10 @@ class Settings:
             libro_client_id=_env("LIBRO_CLIENT_ID"),
             libro_client_secret=_env("LIBRO_CLIENT_SECRET"),
             libro_restaurant_id=_env("LIBRO_RESTAURANT_ID") or _env("YEN_RESTAURANT_ID", "rest_yen_mtl"),
+            libro_private_base_url=_env("LIBRO_PRIVATE_BASE_URL", "https://api.libroreserve.com"),
+            libro_private_token=_env("LIBRO_PRIVATE_TOKEN"),
+            libro_private_email=_env("LIBRO_PRIVATE_EMAIL"),
+            libro_private_restaurant_id=_env("LIBRO_PRIVATE_RESTAURANT_ID", "8169"),
             llm_provider=_env("YEN_LLM_PROVIDER", "google"),
             tts_provider=_env("YEN_TTS_PROVIDER", "deepgram"),
             language_mode=_env("YEN_LANGUAGE_MODE", "en"),

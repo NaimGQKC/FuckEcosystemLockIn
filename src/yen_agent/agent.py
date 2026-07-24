@@ -36,7 +36,22 @@ from livekit.agents import (
     cli,
     metrics,
 )
-from livekit.plugins import deepgram
+# Plugins MUST be imported at module top level: LiveKit registers each plugin at
+# import time and requires that to happen on the main thread. Importing them
+# lazily inside a builder (which runs in the job worker thread) raises
+# "Plugins must be registered on the main thread". deepgram/google/openai ship
+# with the [agent] extra; cartesia and noise_cancellation are optional.
+from livekit.plugins import deepgram, google, openai
+
+try:
+    from livekit.plugins import cartesia
+except Exception:  # pragma: no cover - optional plugin
+    cartesia = None
+
+try:
+    from livekit.plugins import noise_cancellation
+except Exception:  # pragma: no cover - optional plugin
+    noise_cancellation = None
 
 from .concierge import Concierge
 from .config import Settings
@@ -67,18 +82,17 @@ def _build_stt(settings: Settings):
 
 def _build_llm(settings: Settings):
     if settings.llm_provider == "openai":
-        from livekit.plugins import openai
-
         return openai.LLM(model="gpt-4o-mini")
-    from livekit.plugins import google
-
     return google.LLM(model="gemini-2.5-flash-lite")
 
 
 def _build_tts(settings: Settings):
     if settings.tts_provider == "cartesia":
-        from livekit.plugins import cartesia
-
+        if cartesia is None:
+            raise RuntimeError(
+                "YEN_TTS_PROVIDER=cartesia but livekit-plugins-cartesia isn't "
+                'installed. Run: pip install -e ".[agent]"'
+            )
         return cartesia.TTS(model="sonic-2", language="fr" if settings.is_multilingual else "en")
     return deepgram.TTS(model="aura-2-thalia-en")
 
@@ -144,14 +158,15 @@ async def entrypoint(ctx: JobContext) -> None:
     ctx.add_shutdown_callback(_log_usage)
     ctx.add_shutdown_callback(service.aclose)
 
-    # Krisp telephony noise cancellation improves narrowband phone audio.
+    # Krisp telephony noise cancellation (BVC) is a LiveKit Cloud feature, so it
+    # only applies when connected with credentials — not in local console mode.
     room_input_options = None
-    try:
-        from livekit.plugins import noise_cancellation
-
-        room_input_options = RoomInputOptions(noise_cancellation=noise_cancellation.BVC())
-    except Exception:  # pragma: no cover - optional plugin
-        logger.info("noise_cancellation plugin not installed; continuing without it.")
+    has_cloud = bool(os.environ.get("LIVEKIT_API_KEY") and os.environ.get("LIVEKIT_URL"))
+    if noise_cancellation is not None and has_cloud:
+        try:
+            room_input_options = RoomInputOptions(noise_cancellation=noise_cancellation.BVC())
+        except Exception:  # pragma: no cover - keep the call alive regardless
+            logger.info("noise cancellation unavailable; continuing without it.")
 
     await session.start(agent=agent, room=ctx.room, room_input_options=room_input_options)
     await ctx.connect()

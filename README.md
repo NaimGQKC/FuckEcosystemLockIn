@@ -27,12 +27,13 @@ Every reservation tool depends only on the `ReservationService` abstraction
 
 | Implementation | Backend | When |
 |---|---|---|
-| `MockReservationService` | local FastAPI + SQLite (`mock_libro/`) | Phase 1 POC, tests |
-| `LibroReservationService` | real Libro JSON:API + OAuth | Phase 3, after partner access |
+| `MockReservationService` | local FastAPI + SQLite (`mock_libro/`) | POC, demos, tests |
+| `LibroPrivateReservationService` | **real YEN reservations** via the Libro dashboard API (token auth) | production ([guide](docs/LIBRO_PRIVATE_INTEGRATION.md)) |
+| `LibroReservationService` | Libro partner OAuth API | unused (partner route didn't respond) |
 
-They share one JSON:API client (`reservation/jsonapi.py`); only base URL + auth
-differ. **Swapping mock → real Libro is a one-line change** (`YEN_RESERVATION_BACKEND=libro`).
-The agent and its tools never import HTTP or Libro specifics.
+**Swapping mock → real is a config change** (`YEN_RESERVATION_BACKEND=libro-private`).
+The agent and its tools never import HTTP or Libro specifics — each backend keeps
+its own wire-format details in one file.
 
 ```
 caller ─▶ LiveKit AgentSession (STT → LLM → TTS)
@@ -45,8 +46,8 @@ caller ─▶ LiveKit AgentSession (STT → LLM → TTS)
               │  depends only on
               ▼
        ReservationService  (ABC)
-          ├── MockReservationService ─▶ mock_libro (FastAPI + SQLite)
-          └── LibroReservationService ─▶ api.staging.libro.app
+          ├── MockReservationService        ─▶ mock_libro (FastAPI + SQLite)
+          └── LibroPrivateReservationService ─▶ api.libroreserve.com (YEN, id 8169)
 ```
 
 ## Quick start
@@ -206,20 +207,26 @@ The things that break voice agents in practice are handled deterministically
 - **Remembered call state** — name, phone, and party size collected once persist
   for the rest of the call (LiveKit's `UserData` pattern), so the agent can
   cancel "the reservation under my number" without asking again.
-- **Runtime** — the worker prewarms VAD once per process, uses semantic turn
-  detection + preemptive generation to cut latency, enables Krisp telephony
-  noise cancellation, and logs per-turn metrics + a usage summary per call.
+- **Runtime** — bundled VAD, semantic turn detection + preemptive generation to
+  cut latency, Krisp telephony noise cancellation (on LiveKit Cloud), and
+  per-turn metrics + a usage summary per call.
 
 ## Phased plan
 
 - **Phase 1 (this repo):** free, web-tested agent against the mock. ✅
 - **Phase 2:** buy a Twilio CA number, bridge via LiveKit SIP, test a real call.
-- **Phase 3:** set `YEN_RESERVATION_BACKEND=libro` with partner credentials, run
-  the same eval suite against Libro staging, certify, go live.
+- **Phase 3 — real reservations:** set `YEN_RESERVATION_BACKEND=libro-private`
+  with the YEN Libro token. First run the **read-only probe** to confirm the live
+  API shapes, then a single controlled test booking. Full walkthrough:
+  [`docs/LIBRO_PRIVATE_INTEGRATION.md`](docs/LIBRO_PRIVATE_INTEGRATION.md).
 
-Request Libro partner access in parallel (email `admin@libroreserve.com`) — it
-gates production and is outside our timeline, which is exactly why we build
-against a mock first.
+  ```bash
+  python scripts/probe_libro_private.py --date 2026-08-15 --party 2   # safe, read-only
+  ```
+
+  The official Libro **partner** API (`LibroReservationService`) is stubbed but
+  unused — that route didn't respond — so production goes through the dashboard
+  API adapter instead.
 
 ## Cost: an honest note
 
@@ -253,7 +260,8 @@ src/yen_agent/
     errors.py          #   Libro error-code → typed exception mapping
     jsonapi.py         #   shared httpx JSON:API client
     mock.py            #   MockReservationService (in-process or http)
-    libro.py           #   LibroReservationService (real, OAuth) — Phase 3
+    libro_private.py   #   LibroPrivateReservationService — REAL YEN (token auth)
+    libro.py           #   LibroReservationService (partner OAuth) — unused
   concierge.py         # reservation orchestration + spoken responses (no LiveKit)
   datetime_resolve.py  # deterministic natural-language date parsing
   phone.py             # phone-number normalization to E.164
