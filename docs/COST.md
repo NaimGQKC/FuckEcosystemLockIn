@@ -1,62 +1,157 @@
-# What this costs to run, per month
+# What this costs, and what it costs to *manage*
 
-Recalculated after two changes that moved the numbers: French TTS is no longer
-Deepgram, and we now know the real per-turn token count.
+Recomputed from the venue's real call log, with published vendor rates. The
+owner's constraint drives the design: **"I just want to manage the connection to
+Libro. Nothing else. And it should work properly enough."**
 
-## The volume, from real data (not a guess)
+That is a stronger requirement than low cost, and it changes the stack.
 
-The venue's own call log: **84 calls in 26 days ≈ 97 calls/month**, median **54
-seconds**, p90 119s. That works out to roughly **90 talk-minutes/month**.
+## Volume — measured, not estimated
 
-Everything below scales off that.
+Every duration in the 84-call log was summed directly:
 
-## Monthly estimate
+```
+calls in window     84  over 25.0 days   -> 102 calls/month
+total talk time     91.0 min / 25 days   -> 111 min/month
+median              54s      (matches the source's stated 54s)
+p90                 119s     (matches the source's stated 119s)
+mean                65s
+```
 
-| Component | Basis | Est. |
+The median and p90 reproducing the source exactly is the check that the
+transcription is right. **111 talk-minutes/month** is the number everything
+scales off — my earlier 90 was low.
+
+Also worth noting: **16 of 84 calls had zero user turns.** Those still cost
+telephony and a little STT, but no LLM and almost no TTS.
+
+## What the incumbent charges: ~$250/month
+
+For 102 calls. That is **~$2.45 per call**, or **~$2.25 per talk-minute** — for a
+system where, on its own data, 43% of calls end in a transfer to a human and only
+15% produce a booking.
+
+## What ours costs
+
+Rates are published list prices (see sources at the bottom); **none of this has
+been on a real bill yet.**
+
+| Component | Rate | Monthly at 111 min |
 |---|---|---|
-| Twilio phone number | ~$1.15/mo + ~$0.0085/min inbound × 90 | **~$2** |
-| Deepgram STT (Nova-3) | ~$0.0077/min streaming × 90 | **~$0.70** |
-| **TTS (multilingual, French)** | agent speaks ~40% of airtime ≈ 36 min, at ElevenLabs-class rates | **~$3–6** |
-| LLM (Groq 70B, paid) | ~3,450 tok/turn × ~8 turns × 97 calls ≈ 2.7M input tok | **~$2** |
-| LiveKit Cloud | free tier likely covers this volume | **$0–5** |
-| Hosting (small VPS, persistent disk) | fixed | **~$5–6** |
-| **Total** | | **~$13–22/mo** |
+| LiveKit agent hosting | $0.01/agent-session-min | **$1.11** — *free tier includes 1,000 min* |
+| STT (Deepgram Nova-3, via Inference) | $0.0077/min | **$0.85** |
+| LLM (Gemini 2.5 Flash, via Inference) | $0.0013/min | **$0.14** |
+| TTS (**Cartesia Sonic**, via Inference) | $0.03/min × ~44 min spoken | **$1.32** |
+| Twilio 514 number | $1.15/mo + ~$0.0085/min | **~$2.10** |
+| **Total** | | **~$5.50/month** |
 
-## What changed, and why
+The LiveKit **Build** tier is free and includes 1,000 agent minutes, 5,000 WebRTC
+minutes, and **$2.50/month of Inference credit** — which covers most of the
+$2.31 of STT+LLM+TTS above. Realistically this runs at **$2–6/month**.
 
-**TTS roughly tripled — and it was not optional.** We had budgeted Deepgram
-Aura-2 at ~$0.018/min for both languages. Then verification showed **all 58 Aura
-voices are English-only**. At a venue where two-thirds of calls are French, an
-English voice mangling *"bonjour"* defeats the entire French-first design. So
-multilingual mode routes to an ElevenLabs-class voice via LiveKit Inference.
+**That is roughly 40–100× cheaper than $250/month.**
 
-This is the **single largest line item after hosting**, and it is the one to
-re-check if volume grows. At 97 calls/month it is a few dollars; at 1,000 it
-would dominate.
+### The caveat that could change it
 
-**The LLM number is now grounded.** Our fixed per-turn prompt was *measured* at
-~3,450 tokens (system prompt ~1,995 + 9 tool schemas ~1,457). That is what makes
-the free tier unusable — 12,000 TPM allows ~3.5 requests/min when a live call
-needs 6–12 — and it is also what sets the paid cost. **Trimming that prompt is
-the one lever that reduces cost and latency simultaneously, on any provider.**
+LiveKit's docs say that **on paid plans "agents are always warm and ready"** —
+which implies free-tier agents may **cold-start**. On a restaurant phone line a
+cold start means dead air on the first call of the day, and dead air at the start
+of a call is precisely what produces the 19% zero-turn abandonment we are trying
+to fix.
 
-## Honesty about these numbers
+If warm agents turn out to require the **Ship** tier, that is **$50/month**, and
+the total becomes **~$55/month**. Still **4.5× cheaper than $250**, and it buys
+away all server management.
 
-- **The TTS figure is the least certain.** LiveKit Inference pricing is bundled
-  and we have not been billed once. Treat $3–6 as a bracket, not a quote.
-- **Nothing here has been measured on a real bill.** These are unit rates ×
-  measured volume. The first month of real usage is the real number.
-- Fixed costs (number + hosting ≈ $7–8) are **over half the total** at this
-  volume. Usage barely matters; this is essentially a flat-fee system.
+**This is the single number worth confirming with LiveKit before launch.** Both
+outcomes are a large win; it only changes whether the answer is "$5" or "$55".
 
-## The comparison that actually matters
+## The reversal: Cartesia comes back
 
-A managed platform (Vapi-class) at ~$0.05/min platform fee plus model costs lands
-in a **similar place** at 90 minutes/month — call it $10–15.
+I removed Cartesia earlier, arguing "one vendor, one key, one bill." Two things
+since have made that wrong:
 
-**So the cost case is a wash, and pretending otherwise is easy to pick apart.**
-The reasons to own this stack are control, data ownership, and being able to fix
-the Libro integration when their private API shifts — which it will. Not savings.
+1. **Deepgram TTS cannot speak French at all** (all 58 Aura voices end in `-en`),
+   so the "one vendor covers both languages" premise was false.
+2. Via **LiveKit Inference, Cartesia needs no separate account or key** — it is
+   billed through LiveKit. The extra-credential objection disappears.
 
-Where owning it *does* win is at growth: our marginal cost per extra call is
-pennies of usage, while a per-minute platform fee scales linearly forever.
+And the cost difference is large:
+
+| French-capable TTS | Rate | Monthly (~44 min) |
+|---|---|---|
+| **Cartesia Sonic** | $0.03/min | **$1.32** |
+| ElevenLabs Multilingual v2 | $0.18/min | $7.92 |
+
+ElevenLabs is **6× the price** for the same job. Cartesia also advertises
+sub-100ms latency, which matters more here than marginal voice quality.
+
+**Decision: Cartesia Sonic for French, via LiveKit Inference.** Quality still has
+to be confirmed by ear before launch — neither voice has been heard yet.
+
+## The part the owner actually cares about: management burden
+
+This is what re-shaped the stack.
+
+### Before (what we had built)
+
+| Thing to manage | Why it's work |
+|---|---|
+| A VPS | OS patches, disk, reboots, "why is it down" |
+| Deepgram account + key | rotation, billing, expiry |
+| Groq account + key | rotation, billing, expiry |
+| LiveKit account + key | |
+| Twilio account + key | |
+| SQLite on a persistent volume | backups, disk filling |
+| **Libro** | ← *the only one he wants* |
+
+**Seven things. Six of them unwanted.**
+
+### After
+
+| Thing to manage | |
+|---|---|
+| **LiveKit** — hosts the agent *and* provides STT/LLM/TTS on one key | one account, one bill |
+| **Twilio** — the phone number only | one account, set once |
+| **Libro** | ← the one he signed up for |
+
+**Three things.** No server to patch, no OS, no Docker host, no scaling, no
+certificates. LiveKit Cloud handles agent lifecycle, upgrades and isolation.
+
+### The one genuine casualty: our SQLite call log
+
+LiveKit Cloud agents run on **ephemeral storage**. Our `store.py` explicitly
+requires a persistent volume — on ephemeral disk, every restart silently drops
+the messages the agent promised to pass on, which is exactly the bug that module
+was written to fix.
+
+So moving to LiveKit Cloud forces a decision:
+
+**Option A — push, don't store.** Messages, takeout requests and callbacks go out
+by SMS/email *the moment they are captured*, and delivery success is what makes
+the promise true. No database at all. Libro remains the record for reservations.
+*Cost: you lose "show me every call from last week" and the failed-booking log.*
+
+**Option B — a managed SQLite (e.g. Turso/libSQL).** Drop-in for our existing
+code, generous free tier, nothing to run. *Cost: one more account — but zero
+maintenance.*
+
+**Recommendation: A now, B if the owner ever asks for history.** A is fewer moving
+parts and directly serves "don't make me manage anything"; the SMS thread on the
+manager's phone becomes the log. B stays cheap to add later because the storage
+is already behind one module.
+
+## Honesty
+
+- **Nothing here has been billed yet.** These are list rates × measured volume.
+- The cold-start question is unresolved and is the only thing that moves the
+  total materially.
+- Cartesia's French has not been heard by anyone on this project.
+- The $250 figure is the owner's recollection, and he is currently on a free
+  trial — worth confirming against an actual invoice before it is quoted anywhere.
+
+## Sources
+
+- [LiveKit pricing](https://livekit.com/pricing) · [Agents on LiveKit Cloud](https://livekit.com/products/agent-cloud-deployment) · [Deploy and scale agents](https://livekit.com/blog/deploy-and-scale-agents-on-livekit-cloud)
+- [Deepgram pricing 2026](https://texttolab.com/blog/deepgram-pricing)
+- [LiveKit Inference rates](https://www.cekura.ai/blogs/livekit-pricing)
