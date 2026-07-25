@@ -311,10 +311,16 @@ class LibroPrivateReservationService(ReservationService):
             else:
                 if resp.status_code not in RETRYABLE_STATUS_CODES:
                     return self._decode(resp, method, path)
-                last = BackendUnavailableError(
-                    f"HTTP {resp.status_code} at {method} {path}",
-                    detail=str(resp.text)[:180].replace("\n", " "),
-                )
+                # A 502/504 on a write is ambiguous in exactly the way a timeout
+                # is: an intermediary gave up, but the origin may still have
+                # processed it. Type it as unknown rather than guess "failed" —
+                # the recovery (a human callback) is safe either way, and
+                # asserting failure invites the caller to rebook a table they
+                # may already have.
+                cls = (BackendUnavailableError if is_get
+                       else BookingOutcomeUnknownError)
+                last = cls(f"HTTP {resp.status_code} at {method} {path}",
+                           detail=str(resp.text)[:180].replace("\n", " "))
 
             if attempt >= attempts:
                 break

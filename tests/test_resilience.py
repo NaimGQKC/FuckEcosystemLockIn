@@ -442,6 +442,36 @@ async def test_server_errors_are_retried_but_bounded(monkeypatch):
     assert len(calls) == 2
 
 
+async def test_gateway_timeout_on_a_write_is_ambiguous_not_a_failure(monkeypatch):
+    """A 504 on POST /bookings may still have been processed by the origin.
+
+    Calling that a definite failure invites the caller to rebook a table they
+    might already hold. "Unknown" routes to a human, which is safe either way.
+    """
+    monkeypatch.setattr(lp, "RETRY_BACKOFF_S", 0.0)
+    posts: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET" and request.url.path == "/people/query":
+            return httpx.Response(200, json={"data": [{"id": "P1"}]})
+        if request.method == "GET" and request.url.path == "/services":
+            return httpx.Response(200, json={"data": [{
+                "id": "S1", "type": "services",
+                "attributes": {"started-at": "2031-09-08T23:00:00Z"}}]})
+        posts.append(request.url.path)
+        return httpx.Response(504, text="gateway timeout")
+
+    svc = _service(handler)
+    try:
+        with pytest.raises(BookingOutcomeUnknownError):
+            await svc.create_booking(time=FUTURE, party_size=2,
+                                     first_name="ZZ", phone="+15145550199")
+    finally:
+        await svc.aclose()
+
+    assert posts == ["/bookings"]  # still never retried
+
+
 async def test_500_is_backend_unavailable_not_a_generic_error():
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(500, json={"errors": [{"detail": "boom"}]})

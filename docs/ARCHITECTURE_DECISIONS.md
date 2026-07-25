@@ -123,7 +123,25 @@ Without LiveKit credentials (plain `console` mode) it falls back to Deepgram and
 **What we gave up**
 - Open-weight models are **weaker at tool calling** than GPT-4-class models. Our tools are simple, so it holds — but it's the reason to keep the swap easy.
 
-**Open decision — the model itself.** `llama-3.3-70b-versatile` measured a **3.55s worst-case** first token, roughly 4x over the ~800ms budget. A smaller model would be faster *and* cheaper *and* less prone to timeouts — three of three on our stated criteria. This is a benchmark we should actually run rather than reason about: same 20 prompts through each candidate, measuring time-to-first-token and whether it picks the right tool. **Not done yet.**
+### The model decision — investigated, and the obvious answer was wrong
+
+`llama-3.3-70b-versatile` measured a **3.55s worst-case** first token, ~4x over budget. The obvious fix is "use a smaller model". **Three findings say don't.**
+
+**1. The binding free-tier limit is tokens, not requests.** Our fixed per-turn prompt is **~3,450 tokens** (system prompt ~1,995 + 9 tool schemas ~1,457). Against the free tier's 12,000 TPM that is **~3.5 requests/minute** — a live call needs 6–12. The 30 RPM cap binds 8.6x later and is a red herring. Groq's prompt caching would fix it, but it supports `gpt-oss-*` models only, so our prefix is re-billed every turn.
+
+**2. The naive fix makes it worse.** `llama-3.1-8b-instant` has **6,000 TPM — half** the 70B's. If throttling is the cause, downgrading increases throttling *and* costs tool accuracy.
+
+**3. A concrete mechanism for 3.55s.** `livekit-agents` defaults `retry_interval=2.0`. One retry (2.0s) on top of a normal ~1.5s generation ≈ 3.5s. A discrete retry explains a **bimodal** worst case far better than inference slowness, which scales smoothly.
+
+**Correction to an earlier claim.** This document previously cited a 24-point BFCL gap between an 8B model and GPT-4o-mini. That figure is for **Llama-3-8B**, not the `llama-3.1-8b-instant` we would actually ship; secondary sources put the 3.1 generation at ~76% vs ~85%. Still a bad trade for a booking agent, but roughly **9 points**, not 24.
+
+**Decision: keep the 70B, move to a paid plan, don't downgrade.** Confidence **~70%** that queueing dominates the 3.55s — not higher, because we found *no* community reports of multi-second free-tier Groq TTFT, which is real evidence against the hypothesis.
+
+**This is also robust to being wrong about latency:** at ~3,450 tokens/turn the free tier's daily cap affords roughly **2 calls/day** and this venue takes ~3.2. Free is unusable on volume alone.
+
+**What settles it.** Groq returns `queue_time`, `prompt_time` and `completion_time` on every response — it decomposes TTFT for us. `scripts/benchmark_llm.py` records all three. If queue p90 is a large share of TTFT p90, it's rate limiting and paying fixes it; if queue ≈ 0 and prefill dominates, it's prompt size and paying will not help latency. **Not yet run — no API keys in this environment.**
+
+**A separate lever worth noting:** ~3,450 tokens of fixed prompt on *every turn* is itself large. Trimming the system prompt and tool schemas would cut latency and cost on any provider.
 
 **Key design point:** the LLM is the *most* replaceable part. It only converses and calls tools; it never does math, dates, or availability. That's deliberate — see below.
 

@@ -84,17 +84,36 @@ def _build_stt(settings: Settings):
 def _build_llm(settings: Settings):
     """Pick the runtime LLM.
 
-    QUOTA WARNING: Google's free Gemini tier allows only ~20 requests **per day**
-    per model — a single voice conversation exhausts it and every later turn dies
-    with 429 RESOURCE_EXHAUSTED. Recommended alternatives:
+    ⚠️ **DO NOT SHIP ON A FREE TIER.** An earlier version of this docstring said
+    Groq's free tier gives "30 req/min, ~14,400/day" with "sub-100ms first token".
+    Both numbers were wrong for this model and this workload:
 
-      groq     free: 30 req/min, ~14,400/day, no card. Sub-100ms first token —
-               the best latency for voice. OpenAI-compatible. (default)
-      cerebras free: very high daily token volume.
+    * **The binding limit is TOKENS, not requests.** Our fixed per-turn prompt is
+      ~3,450 tokens (system prompt ~1,995 + 9 tool schemas ~1,457). Against the
+      free tier's 12,000 TPM for llama-3.3-70b that is **~3.5 requests/minute**,
+      while a live call needs 6-12. The 30 RPM cap binds ~8.6x later — a red
+      herring. Groq's prompt caching would help, but it covers `gpt-oss-*` models
+      only, so our prefix is re-billed every single turn.
+    * The daily token cap works out to roughly **2 calls/day**; this venue takes
+      about 3.2. So the free tier is unusable here on volume alone, regardless of
+      latency.
+    * **Do not "fix" latency by dropping to llama-3.1-8b-instant** — its free-tier
+      budget is 6,000 TPM, *half* the 70B's. If throttling is the problem, the
+      smaller model makes it worse while also costing tool-calling accuracy.
+
+    See docs/LLM_BENCHMARK.md and run scripts/benchmark_llm.py to settle it with
+    measurements: Groq returns `queue_time` / `prompt_time` / `completion_time` on
+    every response, which decomposes TTFT directly.
+
+    Provider options:
+
+      groq     default. Fast hardware; OpenAI-compatible. Use a PAID plan.
+      cerebras high daily token volume.
       xai      xAI's Grok.
       openai   pay-as-you-go, no daily cap.
       livekit  routed through LiveKit Inference on your existing LiveKit key.
-      google   fine for a couple of turns only (see above).
+      google   free tier is ~20 requests per DAY — one conversation exhausts it
+               and every later turn dies with 429. Development only.
     """
     provider = (settings.llm_provider or "groq").lower()
     model = settings.llm_model
