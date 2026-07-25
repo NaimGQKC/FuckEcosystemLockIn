@@ -29,6 +29,11 @@ class Settings:
     llm_model: str = ""  # optional override, e.g. "gpt-4o-mini"
     language_mode: str = "en"  # en | multi
 
+    #: Durable call/message log. MUST point at a persistent volume in production
+    #: — on ephemeral container disk every restart silently drops messages the
+    #: agent promised to pass on.
+    db_path: str = "yen_calls.db"
+
     @classmethod
     def from_env(cls) -> "Settings":
         return cls(
@@ -43,6 +48,7 @@ class Settings:
             llm_provider=_env("YEN_LLM_PROVIDER", "groq"),
             llm_model=_env("YEN_LLM_MODEL", ""),
             language_mode=_env("YEN_LANGUAGE_MODE", "en"),
+            db_path=_env("YEN_DB_PATH", "yen_calls.db"),
         )
 
     @property

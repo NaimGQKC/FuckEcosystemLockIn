@@ -24,6 +24,7 @@ import datetime as dt
 import logging
 
 import os
+import uuid
 
 from dotenv import load_dotenv
 from livekit.agents import (
@@ -50,8 +51,10 @@ except Exception:  # pragma: no cover - optional plugin
 
 from .concierge import Concierge
 from .config import Settings
+from .notify import build_notifier
 from .prompts import GREETING_EN, GREETING_FR, system_instructions
 from .reservation import build_service
+from .store import CallStore
 from .tools import ReservationAgent
 
 try:
@@ -155,7 +158,16 @@ async def entrypoint(ctx: JobContext) -> None:
     service = build_service(settings)
     locale = "fr" if settings.is_multilingual else "en"
     today = _montreal_today()
-    concierge = Concierge(service, locale=locale, today=today)
+
+    # Durable call record. Without this, messages and waitlist captures die when
+    # the caller hangs up — and the agent promises they won't.
+    store = CallStore(settings.db_path)
+    notifier = build_notifier()
+    call_id = getattr(ctx.room, "name", "") or uuid.uuid4().hex[:12]
+    store.start_call(call_id, locale=locale)
+
+    concierge = Concierge(service, locale=locale, today=today,
+                          store=store, notifier=notifier, call_id=call_id)
     agent = ReservationAgent(
         concierge,
         instructions=system_instructions(
@@ -182,7 +194,14 @@ async def entrypoint(ctx: JobContext) -> None:
     async def _log_usage() -> None:
         logger.info("call usage summary: %s", usage.get_summary())
 
+    async def _close_call_record() -> None:
+        try:
+            store.end_call(call_id, outcome="completed")
+        finally:
+            store.close()
+
     ctx.add_shutdown_callback(_log_usage)
+    ctx.add_shutdown_callback(_close_call_record)
     ctx.add_shutdown_callback(service.aclose)
 
     # Krisp telephony noise cancellation (BVC) is a LiveKit Cloud feature, so it

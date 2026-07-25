@@ -9,10 +9,14 @@ responses. ``tools.py`` is a thin LiveKit wrapper over these methods.
 from __future__ import annotations
 
 import datetime as dt
+import logging
+import uuid
 from dataclasses import dataclass, field
 
 from . import datetime_resolve, faq
+from .notify import Notifier
 from .phone import normalize_phone, spoken_phone
+from .store import CallStore
 from .reservation import (
     Availability,
     Booking,
@@ -20,6 +24,8 @@ from .reservation import (
     ReservationError,
     ReservationService,
 )
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -162,13 +168,75 @@ class Concierge:
         *,
         locale: str = "en",
         today: dt.date | None = None,
+        store: CallStore | None = None,
+        notifier: Notifier | None = None,
+        call_id: str = "",
     ):
         self.service = service
         self.locale = locale
         self.today = today or dt.date.today()
+        self.state = CallState()
+        self.call_id = call_id or uuid.uuid4().hex[:12]
+
+        # Durable record. Optional so unit tests stay in-memory and fast, but in
+        # production this is what makes "I've passed your message on" true.
+        self.store = store
+        self.notifier = notifier
+
+        # Kept for tests and the demo. NOT the source of truth: a Concierge is
+        # created per call, so anything only in here dies when the caller hangs
+        # up. That was the bug; `self.store` is the fix.
         self.messages: list[Message] = []
         self.waitlist: list[WaitlistEntry] = []
-        self.state = CallState()
+
+    def _persist(self, *, kind: str, name: str, phone: str, body: str = "",
+                 party_size: int = 0, wanted_date: str = "",
+                 wanted_time: str = "") -> bool:
+        """Commit a message/waitlist capture, then try to alert the restaurant.
+
+        Returns True only if the record is durable. The caller MUST NOT speak a
+        confirmation when this returns False — that is the whole point of the
+        module. Delivery failure does *not* make this False: the row is saved and
+        will show up in `pending_messages()`.
+        """
+        if self.store is None:
+            return True  # no store configured (tests/demo): nothing promised
+
+        try:
+            row_id = self.store.record_message(
+                call_id=self.call_id, kind=kind, name=name, phone=phone, body=body,
+                party_size=party_size, wanted_date=wanted_date,
+                wanted_time=wanted_time,
+            )
+        except Exception:
+            logger.exception("Could not persist %s for call %s", kind, self.call_id)
+            return False
+
+        if self.notifier is not None:
+            subject = ("Waitlist request" if kind == "waitlist"
+                       else "Message from a caller")
+            detail = body or f"party of {party_size} {wanted_date} {wanted_time}".strip()
+            err = self.notifier.send(subject, f"{name} ({phone}) - {detail}")
+            try:
+                self.store.mark_delivered(row_id, error=err)
+            except Exception:
+                logger.exception("Could not update delivery state for row %s", row_id)
+        return True
+
+    def _log_booking(self, *, ok: bool, booking_id: str = "", party_size: int = 0,
+                     wanted_time: str = "", name: str = "", phone: str = "",
+                     error: str = "") -> None:
+        """Record a booking attempt. Never raises — logging must not break a call."""
+        if self.store is None:
+            return
+        try:
+            self.store.record_booking_attempt(
+                call_id=self.call_id, ok=ok, booking_id=booking_id,
+                party_size=party_size, wanted_time=wanted_time, name=name,
+                phone=phone, error=error,
+            )
+        except Exception:
+            logger.exception("Could not log booking attempt for call %s", self.call_id)
 
     # -- availability ------------------------------------------------------
     async def check_availability(
@@ -293,6 +361,15 @@ class Concierge:
             party_size=party_size or self.state.party_size,
             preferred_time=preferred_time,
         )
+        if not self._persist(kind="waitlist", name=entry.name, phone=normalized,
+                             party_size=entry.party_size, wanted_date=entry.date,
+                             wanted_time=entry.preferred_time):
+            return (
+                "I'm sorry — I'm having trouble saving that on my end, and I'd "
+                "rather not promise a callback I can't guarantee. Could you try us "
+                "again shortly, or call 514-543-3354?"
+            )
+
         self.waitlist.append(entry)
         self.state.name = entry.name
         self.state.phone = normalized
@@ -331,7 +408,20 @@ class Concierge:
                 locale=self.locale,
             )
         except ReservationError as exc:
+            # Log the failure so the owner can see that a caller wanted a table
+            # and didn't get one. Silent failures are the ones that cost money.
+            self._log_booking(ok=False, party_size=party_size, wanted_time=time,
+                              name=first_name, phone=normalized,
+                              error=f"{type(exc).__name__}: {exc}")
             return exc.spoken_message
+        except Exception as exc:
+            self._log_booking(ok=False, party_size=party_size, wanted_time=time,
+                              name=first_name, phone=normalized,
+                              error=f"{type(exc).__name__}: {exc}")
+            raise
+
+        self._log_booking(ok=True, booking_id=booking.id, party_size=party_size,
+                          wanted_time=time, name=first_name, phone=normalized)
 
         # Remember for the rest of the call.
         self.state.name = first_name or self.state.name
@@ -417,7 +507,23 @@ class Concierge:
 
     # -- message taking ----------------------------------------------------
     def take_message(self, *, name: str, phone: str, message: str) -> str:
-        self.messages.append(Message(name=name, phone=phone, body=message))
+        normalized = normalize_phone(phone) or self.state.phone
+        if not normalized:
+            return "What's the best number for the team to reach you on?"
+
+        if not self._persist(kind="message", name=name, phone=normalized,
+                             body=message):
+            # Never claim we passed it on when we couldn't save it. Say something
+            # true and give them a way to reach a human themselves.
+            return (
+                "I'm sorry — I'm having trouble saving that on my end, and I don't "
+                "want to promise something I can't deliver. Could you call us back "
+                "in a few minutes, or reach us at 514-543-3354?"
+            )
+
+        self.messages.append(Message(name=name, phone=normalized, body=message))
+        self.state.name = name or self.state.name
+        self.state.phone = normalized
         return (
             f"Got it, {name} — I've passed your message to the team and they'll "
             "get back to you. Is there anything else?"
