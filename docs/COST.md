@@ -36,18 +36,40 @@ system where, on its own data, 43% of calls end in a transfer to a human and onl
 Rates are published list prices (see sources at the bottom); **none of this has
 been on a real bill yet.**
 
-| Component | Rate | Monthly at 111 min |
-|---|---|---|
-| LiveKit agent hosting | $0.01/agent-session-min | **$1.11** — *free tier includes 1,000 min* |
-| STT (Deepgram Nova-3, via Inference) | $0.0077/min | **$0.85** |
-| LLM (Gemini 2.5 Flash, via Inference) | $0.0013/min | **$0.14** |
-| TTS (**Cartesia Sonic**, via Inference) | $0.03/min × ~44 min spoken | **$1.32** |
-| Twilio 514 number | $1.15/mo + ~$0.0085/min | **~$2.10** |
-| **Total** | | **~$5.50/month** |
+> **Superseded in detail by `docs/STACK_DECISION.md`**, which verified these rates
+> against primary sources and corrected two errors here. Numbers below are the
+> corrected ones; that document is authoritative.
 
-The LiveKit **Build** tier is free and includes 1,000 agent minutes, 5,000 WebRTC
-minutes, and **$2.50/month of Inference credit** — which covers most of the
-$2.31 of STT+LLM+TTS above. Realistically this runs at **$2–6/month**.
+| Component | Monthly at 111 min |
+|---|---|
+| **LiveKit Cloud — Ship tier** (always-warm agents) | **$50.00** |
+| STT (Deepgram Nova-3 Multilingual, via Inference) | $0.64 |
+| LLM (Gemini 2.5 Flash, via Inference) | $1.09 |
+| TTS (Cartesia `sonic-3` French, via Inference) | $1.32 |
+| *— covered by Ship's $5/mo inference credit* | *−$3.05* |
+| Twilio 514/438 number | $1.65 |
+| Database (Supabase free tier, `ca-central-1`) | $0.00 |
+| **Total** | **≈ $51.65 / month** |
+
+### The free tier is not viable — two independent reasons
+
+1. **Build-tier agents cold-start 10–20 seconds.** LiveKit's own quotas doc says
+   so outright, and their pricing matrix lists cold-start prevention as Ship-only.
+   Twenty seconds of dead air before the greeting would recreate the exact
+   abandonment problem we spent a workstream fixing.
+2. **Build's inference credit is a hard cap, not a discount** — once exceeded,
+   *requests fail* rather than incurring overage. Build gives $2.50/month; our
+   measured usage is **$3.05**, with a floor of $2.80 even assuming zero output
+   tokens. **The phone line would go down mid-month, silently, with no bill to
+   warn anyone** — the worst possible failure for an owner who can't monitor it.
+
+### Correction: the LLM line here was ~8× too low
+
+An earlier version of this file used $0.0013/min for the LLM. That rate is
+LiveKit's calculator default, which assumes **3,000 tokens/minute**. Our measured
+prompt is ~3,450 tokens per *turn* — roughly **25,000 tokens/minute**. The
+corrected figure is $1.09/month. Small in absolute terms, but it is the number
+that pushes usage past Build's hard cap, so the error mattered.
 
 **That is roughly 30–80× cheaper than $200/month.**
 
@@ -91,8 +113,37 @@ And the cost difference is large:
 ElevenLabs is **6× the price** for the same job. Cartesia also advertises
 sub-100ms latency, which matters more here than marginal voice quality.
 
-**Decision: Cartesia Sonic for French, via LiveKit Inference.** Quality still has
-to be confirmed by ear before launch — neither voice has been heard yet.
+## SETTLED: European French is accepted
+
+**The owner has decided he is fine with a France-French voice**, provided the call
+**opens in French** and the intro is **short**. That closes the largest open
+question in the stack.
+
+Why it matters so much: **no `fr-CA` voice exists anywhere in LiveKit Inference** —
+verified across all 28 TTS models from 7 providers; French appears only as `fr` /
+`fr-FR`. Genuine Québécois TTS exists only on **Azure** and **AWS Polly**, and both
+are plugin-only, meaning **+1 cloud account, +1 key to rotate, +1 console** each.
+
+Azure carried a failure mode that disqualified it on its own terms: if the Azure
+key ever lapses, **French dies while English keeps working** — a partial, silent
+failure that looks healthy while failing two-thirds of callers. Precisely what an
+owner who cannot monitor the system would never catch.
+
+**Decision: Cartesia `sonic-3` (`fr`) via LiveKit Inference. Zero extra accounts,
+zero extra keys, zero extra dashboards.** No Azure, no AWS.
+
+The research was honest that the concern was *somewhat* overweighted but not
+imaginary: Montréal accent-attitude studies suggest European French reads as
+competent but slightly less warm — a real if modest cost for a restaurant
+greeting, and measured on human speakers rather than TTS. Comprehension is a
+non-issue.
+
+**Still gated on a listening test** — nobody has heard this voice yet. But the
+decision no longer blocks: if it sounds wrong, the fallback is another
+zero-account voice, not a second cloud provider.
+
+This also reinforces the greeting design already shipped: **"YEN, bonjour !"** —
+French first, two words, ~0.9s.
 
 ## The part the owner actually cares about: management burden
 
@@ -141,14 +192,17 @@ the promise true. No database at all. Libro remains the record for reservations.
 code, generous free tier, nothing to run. *Cost: one more account — but zero
 maintenance.*
 
-**Owner's decision: B.** He is willing to accept one more account specifically to
-keep a proper record of what the agent does. That is a reasonable trade — with a
-$100/month ceiling there is no cost pressure, and losing the failed-booking log
-would remove the only way to answer *"did a reservation not get made?"*.
+**Owner's decision: B**, and it stands even though the research recommended A.
+He accepts one extra account to keep a proper record of what the agent does.
+Losing the failed-booking log would remove the only way to answer *"did a
+reservation not get made?"* — which he asked for explicitly.
 
-Turso's free tier is orders of magnitude above our usage (we write roughly 100
-rows a month), so **this adds $0**. `store.py` is already SQLite, and libSQL is a
-drop-in, so the change is small and stays behind the one module.
+**But not Turso — Supabase, in `ca-central-1` (Montréal).** Turso cannot host in
+Canada. The database holds guest names and phone numbers, and Quebec's Law 25
+governs personal information leaving the province, so Canadian residency is worth
+more than the drop-in convenience of libSQL. Supabase's free tier is far above our
+~100 rows/month, so this still adds **$0**. `store.py` keeps all storage behind
+one module, so swapping the driver is contained.
 
 ## Honesty
 
