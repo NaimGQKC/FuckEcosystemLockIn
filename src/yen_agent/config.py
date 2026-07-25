@@ -10,6 +10,20 @@ def _env(key: str, default: str = "") -> str:
     return os.environ.get(key, default)
 
 
+def _env_float(key: str, default: float) -> float:
+    """Read a float from env, falling back to ``default`` on anything unusable.
+
+    A typo in an env var must not stop the phone from being answered.
+    """
+    raw = os.environ.get(key, "")
+    if not raw.strip():
+        return default
+    try:
+        return float(raw)
+    except ValueError:
+        return default
+
+
 @dataclass
 class Settings:
     # Reservation backend
@@ -28,6 +42,25 @@ class Settings:
     llm_provider: str = "groq"  # groq | cerebras | xai | openai | livekit | google
     llm_model: str = ""  # optional override, e.g. "gpt-4o-mini"
     language_mode: str = "en"  # en | multi
+
+    #: TTS voice override. A value containing "/" (e.g. "elevenlabs/eleven_flash_v2_5")
+    #: is routed through LiveKit Inference on the existing LiveKit key; anything
+    #: else is treated as a Deepgram Aura model name. Empty = pick per language
+    #: mode (see ``agent._build_tts``).
+    tts_model: str = ""
+
+    #: Seconds the LiveKit SDK ignores caller audio at the start of the agent's
+    #: FIRST utterance while acoustic echo cancellation warms up.
+    #:
+    #: ⚠️ The SDK default is 3.0, and during that window it both blocks
+    #: interruption AND feeds silence to the STT — so the caller physically
+    #: cannot barge in over a greeting, and their first words are never
+    #: transcribed. Our greeting is ~1s, so the SDK default would make the whole
+    #: greeting (and ~2s after it) uninterruptible. See
+    #: docs/GREETING_ABANDONMENT.md cause #2. Default 0.0 = barge-in from the
+    #: first frame. Raise it via YEN_AEC_WARMUP_S if echo ever self-interrupts
+    #: the greeting.
+    aec_warmup_s: float = 0.0
 
     #: Durable call/message log. MUST point at a persistent volume in production
     #: — on ephemeral container disk every restart silently drops messages the
@@ -48,6 +81,8 @@ class Settings:
             llm_provider=_env("YEN_LLM_PROVIDER", "groq"),
             llm_model=_env("YEN_LLM_MODEL", ""),
             language_mode=_env("YEN_LANGUAGE_MODE", "en"),
+            tts_model=_env("YEN_TTS_MODEL", ""),
+            aec_warmup_s=_env_float("YEN_AEC_WARMUP_S", 0.0),
             db_path=_env("YEN_DB_PATH", "yen_calls.db"),
         )
 

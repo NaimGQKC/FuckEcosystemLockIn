@@ -29,22 +29,41 @@ person, service) and confirmed by a single controlled test booking.
 
 Security: the token is a master credential (env only, never logged/committed).
 This is an undocumented internal API and may change without notice.
+
+Resilience: because this is a reverse-engineered private API behind a long-lived
+token, "Libro stopped answering" is the most likely unattended failure, not a
+hypothetical one. Two rules encode that (see the timeout block below):
+
+  * every request is bounded by a timeout sized for a live phone call, and
+  * only GET is ever retried — never a booking create.
+
+Transport failures and 5xx surface as :class:`BackendUnavailableError` (or
+:class:`BookingOutcomeUnknownError` for an in-flight write) so the concierge can
+capture the caller instead of inventing a reason to turn them away.
 """
 
 from __future__ import annotations
 
+import asyncio
 import datetime as dt
+import logging
+import time as _time
 
 import httpx
 
 from .base import ReservationService
 from .errors import (
+    BackendAuthError,
+    BackendUnavailableError,
     BookingNotFoundError,
+    BookingOutcomeUnknownError,
     LargePartyError,
     ReservationError,
     SlotUnavailableError,
 )
 from .models import Availability, Booking, PaymentIntent, Person, TimeSlot
+
+logger = logging.getLogger(__name__)
 
 # The API is versioned per-endpoint via the Accept header (confirmed from the
 # dashboard's own request headers): availabilities use v2, every JSON:API
@@ -75,6 +94,75 @@ MAX_ONLINE_PARTY = 6
 DEFAULT_TURN_MIN = 90
 LARGE_PARTY_TURN_MIN = 120
 LARGE_PARTY_THRESHOLD = 6
+
+# ---------------------------------------------------------------------------
+# Timeouts and retries: this runs while a human is holding a phone.
+# ---------------------------------------------------------------------------
+# A hung socket is strictly worse than an error. An error gets a spoken
+# response in under a second; a hang gets dead air, and dead air on a phone call
+# is indistinguishable from a dropped call. The caller hangs up and we lose them
+# without even a name — the one outcome this system exists to prevent.
+#
+# The previous setting was a single blanket 15s. Nobody waits 15 seconds in
+# silence for a restaurant to answer "is 7pm free?". These numbers come from what
+# a caller will actually tolerate, not from what the server might need:
+#
+#   ~1s   normal: the agent covers it with "let me check that for you"
+#   ~2-3s noticeable pause, still fine
+#   ~5s   the caller says "hello? are you there?"
+#   ~8s+  the caller assumes the line dropped
+#
+# So the ceiling on any single conversational turn is ~8s of silence, and every
+# number below is derived from spending that budget:
+
+#: TCP+TLS handshake. If we can't get a socket in 3s the network is broken, and
+#: waiting longer only converts a fast failure into dead air. Cheap to retry.
+CONNECT_TIMEOUT_S = 3.0
+
+#: Response wait for a **read** (availability, services, people lookup). 4s, so
+#: that connect+read+one retry still lands inside the ~8s tolerance ceiling.
+READ_TIMEOUT_S = 4.0
+
+#: Response wait for a **write** (POST /bookings, POST /people). Deliberately
+#: longer — writes are never retried (see below), so this single attempt gets
+#: the whole budget, and giving up early on a create that would have succeeded
+#: is the expensive mistake. 8s is the caller's outright patience limit, and the
+#: agent has just said "let me get that booked for you", which buys a moment.
+WRITE_READ_TIMEOUT_S = 8.0
+
+#: Time to push our (tiny) request body out, and to wait for a pooled
+#: connection. Both should be instant; these only exist so neither can hang.
+SEND_TIMEOUT_S = 3.0
+POOL_TIMEOUT_S = 2.0
+
+#: Retries are for **GET only**, and exactly one of them.
+#:
+#: Why one: a retry pays for itself against a single dropped packet or a
+#: recycled connection, which is the common transient failure. A second retry
+#: only helps if the backend is genuinely down, in which case we should be
+#: degrading to a human callback rather than making the caller listen to us try
+#: again. Two attempts also keeps the worst case inside the silence budget.
+#:
+#: Why GET only — this is the safety-critical half. ``POST /bookings`` has no
+#: idempotency key on this API. If it times out we do not know whether Libro
+#: seated the guest, so re-sending it can put one caller at two tables on a
+#: Saturday night, which is worse for the restaurant than not booking at all.
+#: The same reasoning covers ``POST /people`` (duplicate guest records) and
+#: PATCH. So: no non-GET request is ever retried, at any level, ever.
+GET_MAX_ATTEMPTS = 2
+RETRY_BACKOFF_S = 0.25
+
+#: Hard ceiling on a retried GET including backoff. Belt-and-braces: even if
+#: every individual timeout somehow stacks, we stop asking at this point rather
+#: than let the caller sit in silence. Checked *before* sleeping, so a slow first
+#: attempt simply means no retry happens at all.
+RETRY_BUDGET_S = 9.0
+
+#: Statuses that mean "the backend is having a moment", not "your request was
+#: wrong". Retryable on a GET; surfaced as BackendUnavailableError otherwise.
+#: 429 is included because Libro's dashboard API is undocumented and we would
+#: rather back off once than hammer it.
+RETRYABLE_STATUS_CODES = frozenset({429, 502, 503, 504})
 
 
 def turn_minutes(party_size: int) -> int:
@@ -119,7 +207,7 @@ class LibroPrivateReservationService(ReservationService):
         email: str,
         restaurant_id: str,
         base_url: str = "https://api.libroreserve.com",
-        timeout: float = 15.0,
+        timeout: float | httpx.Timeout | None = None,
     ):
         if not token or not email:
             raise ValueError(
@@ -127,9 +215,22 @@ class LibroPrivateReservationService(ReservationService):
                 "libro-private backend."
             )
         self._restaurant_id = str(restaurant_id)
+        # Two timeout profiles, because a read and a write have different costs
+        # of failure on a live call. See the constants above for the reasoning.
+        if timeout is None:
+            self._read_timeout = httpx.Timeout(
+                connect=CONNECT_TIMEOUT_S, read=READ_TIMEOUT_S,
+                write=SEND_TIMEOUT_S, pool=POOL_TIMEOUT_S,
+            )
+            self._write_timeout = httpx.Timeout(
+                connect=CONNECT_TIMEOUT_S, read=WRITE_READ_TIMEOUT_S,
+                write=SEND_TIMEOUT_S, pool=POOL_TIMEOUT_S,
+            )
+        else:  # explicit override (tests, probes) applies to everything
+            self._read_timeout = self._write_timeout = httpx.Timeout(timeout)
         self._client = httpx.AsyncClient(
             base_url=base_url,
-            timeout=timeout,
+            timeout=self._read_timeout,
             headers={
                 "Accept": ACCEPT_V1,  # default; availabilities override to v2
                 "Authorization": f'Token token="{token}", email="{email}"',
@@ -137,6 +238,49 @@ class LibroPrivateReservationService(ReservationService):
         )
 
     # -- low-level ---------------------------------------------------------
+    def _unreachable(self, method: str, path: str, what: str,
+                     exc: Exception) -> BackendUnavailableError:
+        """Classify a transport failure — and decide whether it is *ambiguous*.
+
+        A failed GET is unambiguous: nothing changed, say so and move on. A
+        failed ``POST /bookings`` is not — the request may have landed. That
+        distinction is the difference between "sorry, try another time" and
+        "I can't confirm that, someone will call you back", so it is typed.
+        """
+        where = f"{method} {path}"
+        # Never include the exception's repr blindly anywhere near headers; the
+        # message below carries no credentials (httpx errors quote the URL only).
+        detail = f"{type(exc).__name__}: {exc}"
+        if method.upper() != "GET":
+            return BookingOutcomeUnknownError(f"{where} {what}", detail=detail)
+        return BackendUnavailableError(f"{where} {what}", detail=detail)
+
+    def _decode(self, resp: httpx.Response, method: str, path: str):
+        try:
+            body = resp.json()
+        except ValueError:
+            body = None
+        if resp.status_code >= 400:
+            where = f"{method} {path}"
+            snippet = str(body)[:180].replace("\n", " ")
+            if resp.status_code in (401, 403):
+                # The long-lived token died or was rotated. Nothing was created:
+                # a rejected request never reached the booking logic.
+                raise BackendAuthError(f"HTTP {resp.status_code} at {where}",
+                                       detail=snippet)
+            if resp.status_code == 404:
+                raise BookingNotFoundError(f"404 Not Found at {where}", detail=snippet)
+            if resp.status_code in (409, 422):
+                # A slot can fill between the availability check and the create.
+                raise SlotUnavailableError(f"HTTP {resp.status_code} at {where}",
+                                           detail=snippet)
+            if resp.status_code >= 500:
+                # Libro is broken, we are not. Degrade, don't invent a reason.
+                raise BackendUnavailableError(f"HTTP {resp.status_code} at {where}",
+                                              detail=snippet)
+            raise ReservationError(f"HTTP {resp.status_code} at {where}", detail=snippet)
+        return body if body is not None else {}
+
     async def _request(self, method: str, path: str, *, json: dict | None = None,
                        params: dict | None = None, accept: str | None = None):
         # restaurant-id is NOT auto-injected: the dashboard only sends it on
@@ -146,23 +290,45 @@ class LibroPrivateReservationService(ReservationService):
             headers["Accept"] = accept
         if json is not None:
             headers["Content-Type"] = WRITE_CONTENT_TYPE
-        resp = await self._client.request(method, path, json=json, params=params,
-                                          headers=headers)
-        try:
-            body = resp.json()
-        except ValueError:
-            body = None
-        if resp.status_code >= 400:
-            where = f"{method} {path}"
-            snippet = str(body)[:180].replace("\n", " ")
-            if resp.status_code == 404:
-                raise BookingNotFoundError(f"404 Not Found at {where}", detail=snippet)
-            if resp.status_code in (409, 422):
-                # A slot can fill between the availability check and the create.
-                raise SlotUnavailableError(f"HTTP {resp.status_code} at {where}",
-                                           detail=snippet)
-            raise ReservationError(f"HTTP {resp.status_code} at {where}", detail=snippet)
-        return body if body is not None else {}
+
+        # GET is the only method safe to repeat. See GET_MAX_ATTEMPTS.
+        is_get = method.upper() == "GET"
+        attempts = GET_MAX_ATTEMPTS if is_get else 1
+        timeout = self._read_timeout if is_get else self._write_timeout
+        started = _time.monotonic()
+
+        last: BackendUnavailableError | None = None
+        for attempt in range(1, attempts + 1):
+            try:
+                resp = await self._client.request(
+                    method, path, json=json, params=params, headers=headers,
+                    timeout=timeout,
+                )
+            except httpx.TimeoutException as exc:
+                last = self._unreachable(method, path, "timed out", exc)
+            except httpx.HTTPError as exc:  # connect/DNS/protocol/pool failures
+                last = self._unreachable(method, path, "could not be reached", exc)
+            else:
+                if resp.status_code not in RETRYABLE_STATUS_CODES:
+                    return self._decode(resp, method, path)
+                last = BackendUnavailableError(
+                    f"HTTP {resp.status_code} at {method} {path}",
+                    detail=str(resp.text)[:180].replace("\n", " "),
+                )
+
+            if attempt >= attempts:
+                break
+            # Budget check happens *before* the sleep, so a slow first attempt
+            # simply means we don't retry rather than blowing past the ceiling.
+            if _time.monotonic() - started + RETRY_BACKOFF_S > RETRY_BUDGET_S:
+                logger.warning("Libro %s %s failed and the retry budget is spent",
+                               method, path)
+                break
+            logger.warning("Libro %s %s failed (%s); retrying once", method, path, last)
+            await asyncio.sleep(RETRY_BACKOFF_S)
+
+        assert last is not None  # the loop only exits here after a failure
+        raise last
 
     # -- parsing -----------------------------------------------------------
     def _parse_booking(self, raw) -> Booking:
@@ -249,6 +415,12 @@ class LibroPrivateReservationService(ReservationService):
                 "restaurant-id": self._restaurant_id, "started-on": date,
                 "only-services": "true",
             })
+        except BackendUnavailableError:
+            # Deliberately NOT swallowed. Returning "" here makes create_booking
+            # raise SlotUnavailableError, i.e. the agent tells a caller "that
+            # time isn't available" when the truth is "we couldn't look". That
+            # sends a paying guest away for a reason we invented.
+            raise
         except ReservationError:
             return ""
         for s in (body.get("data", []) if isinstance(body, dict) else []):
@@ -360,6 +532,11 @@ class LibroPrivateReservationService(ReservationService):
         try:
             body = await self._request("GET", f"/people/{person_id}",
                                        params={"include": "bookings"})
+        except BackendUnavailableError:
+            # An empty list here means "you have no reservation" to the caller.
+            # During an outage that is false, and it is the kind of false that
+            # ends with a guest arriving to no table. Let it surface.
+            raise
         except ReservationError:
             return []
         included = body.get("included", []) if isinstance(body, dict) else []
@@ -387,6 +564,11 @@ class LibroPrivateReservationService(ReservationService):
         try:
             got = await self._request("GET", f"/bookings/{booking_id}")
             current = (got.get("data", {}) or {}) if isinstance(got, dict) else {}
+        except BackendUnavailableError:
+            # Without the read we would PATCH a near-empty attribute set over a
+            # live booking. Refuse rather than risk blanking a real guest's
+            # record; the concierge degrades to a human callback.
+            raise
         except ReservationError:
             current = {}
         merged = {k: v for k, v in (current.get("attributes") or {}).items()

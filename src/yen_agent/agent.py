@@ -24,7 +24,10 @@ import datetime as dt
 import logging
 
 import os
+import time
 import uuid
+from dataclasses import dataclass, field
+from typing import Callable
 
 from dotenv import load_dotenv
 from livekit.agents import (
@@ -52,7 +55,7 @@ except Exception:  # pragma: no cover - optional plugin
 from .concierge import Concierge
 from .config import Settings
 from .notify import build_notifier
-from .prompts import GREETING_EN, GREETING_FR, system_instructions
+from .prompts import disclosure_reminder, greeting_for, system_instructions
 from .reservation import build_service
 from .store import CallStore
 from .tools import ReservationAgent
@@ -118,13 +121,181 @@ def _build_llm(settings: Settings):
     return google.LLM(model=model or "gemini-2.5-flash-lite")
 
 
-def _build_tts(settings: Settings):
-    """Deepgram Aura-2 — one vendor for both STT and TTS, on one API key.
+#: Deepgram Aura-2 voice used for the English-only build.
+DEEPGRAM_VOICE = "aura-2-thalia-en"
 
-    Deliberately single-provider: every extra vendor is another key that can
-    expire and another bill that can fail on a system meant to run unattended.
+#: Multilingual voice used when the greeting is French. Routed through LiveKit
+#: Inference, so it costs **no additional API key** — it authenticates with the
+#: LiveKit credentials the agent already needs to take a phone call at all.
+MULTILINGUAL_VOICE = "elevenlabs/eleven_flash_v2_5"
+
+
+def _has_livekit_cloud() -> bool:
+    return bool(os.environ.get("LIVEKIT_API_KEY") and os.environ.get("LIVEKIT_URL"))
+
+
+def _build_tts(settings: Settings):
+    """Pick a voice that can actually pronounce what we ask it to say.
+
+    Deliberately single-provider by default: every extra vendor is another key
+    that can expire and another bill that can fail on a system meant to run
+    unattended. Deepgram gives us STT and TTS on one key.
+
+    ⚠️ But **every Deepgram Aura / Aura-2 voice is English-only** (every model
+    id ends in ``-en``; see ``livekit.plugins.deepgram.models.TTSModels``). Our
+    greeting is now French first, for a venue whose calls are two-thirds French
+    — and an English voice reading "YEN, bonjour !" produces exactly the
+    mangled, obviously-foreign pronunciation that makes a Québécois caller hang
+    up. That defeats the change it is meant to serve.
+
+    So in multilingual mode we use a multilingual voice via LiveKit Inference,
+    which needs no new vendor account. Without LiveKit credentials (plain
+    ``console`` mode) we fall back to Deepgram and say so loudly, because the
+    French will sound wrong and that must not be discovered on a live call.
+
+    ``YEN_TTS_MODEL`` overrides both: a value with a "/" goes through LiveKit
+    Inference, anything else is treated as a Deepgram model name.
     """
-    return deepgram.TTS(model="aura-2-thalia-en")
+    override = (settings.tts_model or "").strip()
+    if override:
+        if "/" in override:
+            from livekit.agents import inference
+
+            return inference.TTS(model=override)
+        return deepgram.TTS(model=override)
+
+    if settings.is_multilingual:
+        if _has_livekit_cloud():
+            from livekit.agents import inference
+
+            return inference.TTS(model=MULTILINGUAL_VOICE)
+        logger.warning(
+            "Multilingual mode without LiveKit credentials: falling back to the "
+            "English-only Deepgram voice %s. The French greeting WILL be "
+            "mispronounced — set LIVEKIT_API_KEY/LIVEKIT_URL, or set "
+            "YEN_TTS_MODEL, before putting this on a real line.",
+            DEEPGRAM_VOICE,
+        )
+    return deepgram.TTS(model=DEEPGRAM_VOICE)
+
+
+def _ms(a: float, b: float) -> int:
+    return int(round((b - a) * 1000))
+
+
+@dataclass
+class GreetingTelemetry:
+    """What the caller actually experienced in the first seconds of the call.
+
+    19% of real calls at this venue ended with the caller never speaking
+    (docs/GREETING_ABANDONMENT.md). We cannot test on real users, so the only
+    way any greeting change is falsifiable is to measure the call itself. This
+    class is the measuring instrument; :meth:`as_row` feeds
+    ``CallStore.record_greeting``.
+
+    Deliberately pure and clock-injectable — no LiveKit types, no I/O — so the
+    timing arithmetic is testable without audio, a room, or a network.
+
+    Every ``mark_*`` is idempotent-first-wins: the interesting number is when
+    something happened for the FIRST time, and later events must not overwrite
+    it. Unmeasured stays ``None`` rather than becoming 0, because "we never
+    heard them" and "they answered instantly" are opposite findings.
+    """
+
+    now: Callable[[], float] = time.monotonic
+    answered_at: float | None = None
+    first_word_at: float | None = None
+    greeting_done_at: float | None = None
+    first_user_speech_at: float | None = None
+    greeting_interrupted: bool = False
+    disclosure_spoken: bool = False
+    detected_language: str = ""
+    _langs: list[str] = field(default_factory=list)
+
+    # -- marks -------------------------------------------------------------
+    def mark_answered(self) -> None:
+        if self.answered_at is None:
+            self.answered_at = self.now()
+
+    def mark_agent_speaking(self) -> None:
+        """First audible word out of the agent — the end of the dead-air window."""
+        if self.first_word_at is None:
+            self.first_word_at = self.now()
+
+    def mark_greeting_done(self, *, interrupted: bool, disclosure_spoken: bool) -> None:
+        if self.greeting_done_at is None:
+            self.greeting_done_at = self.now()
+        self.greeting_interrupted = interrupted
+        self.disclosure_spoken = disclosure_spoken
+
+    def mark_user_spoke(self, *, language: str = "") -> None:
+        if self.first_user_speech_at is None:
+            self.first_user_speech_at = self.now()
+        # Language arrives with the transcript, which is later than the VAD
+        # onset — so it is recorded independently of the first-speech instant.
+        if language and language not in self._langs:
+            self._langs.append(language)
+        if language and not self.detected_language:
+            self.detected_language = language
+
+    # -- derived -----------------------------------------------------------
+    @property
+    def user_spoke(self) -> bool:
+        return self.first_user_speech_at is not None
+
+    @property
+    def answer_to_first_word_ms(self) -> int | None:
+        if self.answered_at is None or self.first_word_at is None:
+            return None
+        return _ms(self.answered_at, self.first_word_at)
+
+    @property
+    def greeting_ms(self) -> int | None:
+        if self.first_word_at is None or self.greeting_done_at is None:
+            return None
+        return _ms(self.first_word_at, self.greeting_done_at)
+
+    @property
+    def first_user_speech_ms(self) -> int | None:
+        if self.answered_at is None or self.first_user_speech_at is None:
+            return None
+        return _ms(self.answered_at, self.first_user_speech_at)
+
+    def as_row(self) -> dict:
+        """Only what was actually measured. ``None`` = don't write this field."""
+        return {
+            "answer_to_first_word_ms": self.answer_to_first_word_ms,
+            "greeting_ms": self.greeting_ms,
+            "greeting_interrupted": True if self.greeting_interrupted else None,
+            "user_spoke": True if self.user_spoke else None,
+            "first_user_speech_ms": self.first_user_speech_ms,
+            "detected_language": self.detected_language or None,
+            "disclosure_spoken": True if self.disclosure_spoken else None,
+        }
+
+
+def _attach_greeting_telemetry(session, tele: GreetingTelemetry) -> None:
+    """Wire the SDK's own events into the telemetry record.
+
+    ``agent_state_changed -> speaking`` is the moment audio starts flowing, and
+    ``user_state_changed -> speaking`` is VAD onset — earlier and more honest
+    than waiting for a transcript, because a caller who says "allô" and hangs up
+    still counts as having spoken.
+    """
+
+    @session.on("agent_state_changed")
+    def _on_agent_state(ev) -> None:  # pragma: no cover - needs a live session
+        if getattr(ev, "new_state", "") == "speaking":
+            tele.mark_agent_speaking()
+
+    @session.on("user_state_changed")
+    def _on_user_state(ev) -> None:  # pragma: no cover - needs a live session
+        if getattr(ev, "new_state", "") == "speaking":
+            tele.mark_user_spoke()
+
+    @session.on("user_input_transcribed")
+    def _on_transcribed(ev) -> None:  # pragma: no cover - needs a live session
+        tele.mark_user_spoke(language=getattr(ev, "language", None) or "")
 
 
 def _build_turn_handling(settings: Settings) -> TurnHandlingOptions:
@@ -155,6 +326,11 @@ async def entrypoint(ctx: JobContext) -> None:
     load_dotenv()
     settings = Settings.from_env()
 
+    # The clock starts the moment we pick up: everything below is measured
+    # against this instant, because that is what the caller experiences.
+    tele = GreetingTelemetry()
+    tele.mark_answered()
+
     service = build_service(settings)
     locale = "fr" if settings.is_multilingual else "en"
     today = _montreal_today()
@@ -168,20 +344,40 @@ async def entrypoint(ctx: JobContext) -> None:
 
     concierge = Concierge(service, locale=locale, today=today,
                           store=store, notifier=notifier, call_id=call_id)
-    agent = ReservationAgent(
-        concierge,
-        instructions=system_instructions(
-            multilingual=settings.is_multilingual, today=today.isoformat()
-        ),
+    base_instructions = system_instructions(
+        multilingual=settings.is_multilingual, today=today.isoformat()
     )
+    agent = ReservationAgent(concierge, instructions=base_instructions)
 
     # VAD: AgentSession bundles silero by default, so no explicit vad= needed.
+    #
+    # aec_warmup_duration: THE BARGE-IN FIX. See docs/GREETING_ABANDONMENT.md
+    # cause #2 ("the caller can't interrupt it"). Passing
+    # `allow_interruptions=True` to `session.say()` is necessary but was NOT
+    # sufficient: livekit-agents defaults `aec_warmup_duration=3.0`, and for the
+    # first 3s of the agent's first utterance the SDK
+    #   * returns early from `AgentActivity._interrupt_by_audio_activity`, and
+    #   * substitutes silence frames into the STT stream (`push_audio`)
+    # so a caller talking over the greeting is neither able to interrupt it nor
+    # transcribed at all — which also costs us the language detection we rely on
+    # to switch to English. Our whole greeting is ~1s, so the SDK default made
+    # 100% of it uninterruptible.
+    #
+    # The tradeoff we are accepting: AEC warmup exists so the agent doesn't
+    # self-interrupt on its own echo. We take that risk because (a) this runs
+    # over SIP telephony, where echo control is the carrier's job rather than a
+    # local AEC that needs to converge, and (b) `resume_false_interruption` is
+    # on by default, so a mis-fire resumes the greeting instead of killing it.
+    # If truncated greetings ever show up, YEN_AEC_WARMUP_S raises it back
+    # without a code change.
     session = AgentSession(
         stt=_build_stt(settings),
         llm=_build_llm(settings),
         tts=_build_tts(settings),
         turn_handling=_build_turn_handling(settings),
+        aec_warmup_duration=settings.aec_warmup_s or None,
     )
+    _attach_greeting_telemetry(session, tele)
 
     # -- observability: log per-turn metrics and a usage summary at end -----
     usage = metrics.UsageCollector()
@@ -196,7 +392,12 @@ async def entrypoint(ctx: JobContext) -> None:
 
     async def _close_call_record() -> None:
         try:
-            store.end_call(call_id, outcome="completed")
+            # Last write wins for anything measured after the greeting — most
+            # importantly whether the caller EVER spoke, which is the number
+            # this whole exercise exists to move.
+            store.record_greeting(call_id, **tele.as_row())
+            outcome = "completed" if tele.user_spoke else "no_user_turn"
+            store.end_call(call_id, outcome=outcome)
         finally:
             store.close()
 
@@ -207,7 +408,7 @@ async def entrypoint(ctx: JobContext) -> None:
     # Krisp telephony noise cancellation (BVC) is a LiveKit Cloud feature, so it
     # only applies when connected with credentials — not in local console mode.
     room_input_options = None
-    has_cloud = bool(os.environ.get("LIVEKIT_API_KEY") and os.environ.get("LIVEKIT_URL"))
+    has_cloud = _has_livekit_cloud()
     if noise_cancellation is not None and has_cloud:
         try:
             room_input_options = RoomInputOptions(noise_cancellation=noise_cancellation.BVC())
@@ -217,9 +418,53 @@ async def entrypoint(ctx: JobContext) -> None:
     await session.start(agent=agent, room=ctx.room, room_input_options=room_input_options)
     await ctx.connect()
 
-    greeting = GREETING_FR if settings.is_multilingual else GREETING_EN
-    # say_verbatim: the model otherwise pads the greeting into a ~13s monologue.
-    await session.say(greeting, allow_interruptions=True)
+    await _speak_greeting(session, agent, settings, tele, base_instructions)
+    store.record_greeting(call_id, **tele.as_row())
+
+
+async def _speak_greeting(session, agent, settings: Settings,
+                          tele: GreetingTelemetry, base_instructions: str) -> None:
+    """Say the greeting, then the AI disclosure, as two interruptible utterances.
+
+    Two `say()` calls rather than one sentence, and this is the whole point of
+    the disclosure design in ``prompts.py``:
+
+    * The caller hears "YEN, bonjour !" (~1s) and can answer immediately.
+    * The disclosure follows as its own speech handle. If they have already
+      started talking, we simply never start it — we do not talk over a caller
+      to read them a compliance line.
+    * If the disclosure did not reach them, the model's instructions are updated
+      so it discloses in its first substantive reply. Deferred, never dropped.
+
+    ``session.say()`` is used rather than ``generate_reply()`` on purpose: the
+    text is verbatim, so the model cannot pad it back into the 13-second
+    monologue that caused this bug in the first place.
+    """
+    greeting, disclosure = greeting_for(settings.is_multilingual)
+
+    handle = session.say(greeting, allow_interruptions=True)
+    await handle.wait_for_playout()
+    interrupted = bool(handle.interrupted)
+
+    disclosure_spoken = False
+    if not interrupted:
+        dh = session.say(disclosure, allow_interruptions=True)
+        await dh.wait_for_playout()
+        disclosure_spoken = not dh.interrupted
+        interrupted = bool(dh.interrupted)
+
+    tele.mark_greeting_done(interrupted=interrupted, disclosure_spoken=disclosure_spoken)
+
+    if not disclosure_spoken:
+        agent.update_instructions(
+            base_instructions + disclosure_reminder(settings.is_multilingual)
+        )
+        logger.info("greeting barged over; disclosure deferred to the first reply")
+
+    logger.info(
+        "greeting telemetry: answer->first word %sms, greeting %sms, interrupted=%s",
+        tele.answer_to_first_word_ms, tele.greeting_ms, tele.greeting_interrupted,
+    )
 
 
 def main() -> None:

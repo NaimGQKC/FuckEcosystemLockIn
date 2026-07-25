@@ -4,6 +4,7 @@
     python scripts/calls.py --messages      # messages/waitlist nobody has actioned
     python scripts/calls.py --failed        # bookings the agent could NOT make
     python scripts/calls.py --calls         # recent calls
+    python scripts/calls.py --greeting      # callers who hung up without speaking
     python scripts/calls.py --days 30       # widen the window
     python scripts/calls.py --purge 90      # delete records older than 90 days
 
@@ -30,6 +31,57 @@ def _mask(phone: str) -> str:
     return f"***-***-{phone[-4:]}" if len(phone) >= 4 else phone
 
 
+def _ms(value, suffix: str = "ms") -> str:
+    """Render a measurement, or say plainly that there isn't one.
+
+    A missing timing is NOT zero. Printing "0ms" for a call we never measured
+    would be the reporting version of promising something the code didn't do.
+    """
+    return "not measured" if value is None else f"{int(round(value))}{suffix}"
+
+
+def print_greeting_report(store, days: int) -> None:
+    """The 19% number, measured on our own line instead of the incumbent's.
+
+    Baseline to beat: 16 of 84 calls (19%) at this venue ended with zero user
+    turns. Target: under 10%. See docs/GREETING_ABANDONMENT.md.
+    """
+    s = store.greeting_stats(since_days=days)
+    print(f"Greeting performance — last {days} days\n")
+    print(f"  calls                      {s['calls']}")
+    if not s["calls"]:
+        print("\n  No calls in this window; nothing to report yet.")
+        return
+
+    rate = s["zero_user_turn_rate"]
+    pct = "n/a" if rate is None else f"{rate * 100:.0f}%"
+    print(f"  caller never spoke         {s['zero_user_turn']}  ({pct})")
+    print(f"     baseline to beat        19%   (incumbent, 16 of 84)")
+    print(f"     target                  under 10%")
+    print()
+    print(f"  answer -> first word       avg {_ms(s['avg_answer_to_first_word_ms'])}"
+          f"   worst {_ms(s['max_answer_to_first_word_ms'])}")
+    print(f"  greeting length            avg {_ms(s['avg_greeting_ms'])}"
+          f"   worst {_ms(s['max_greeting_ms'])}")
+    print(f"  caller's first word at     avg {_ms(s['avg_first_user_speech_ms'])}")
+    print(f"  greeting talked over       {s['greeting_interrupted']}"
+          "   (good: they could barge in)")
+    print(f"  disclosure deferred        {s['disclosure_deferred']}"
+          "   (said in the first reply instead)")
+
+    if s["languages"]:
+        langs = "  ".join(f"{k}:{v}" for k, v in s["languages"].items())
+        print(f"  language detected          {langs}")
+
+    silent = store.silent_calls(since_days=days)
+    if silent:
+        print(f"\n  {len(silent)} call(s) with no user turn:")
+        for r in silent:
+            print(f"    [{r['started_at']}] {r['call_id']}  "
+                  f"first word {_ms(r['answer_to_first_word_ms'])}, "
+                  f"greeting {_ms(r['greeting_ms'])}")
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="Inspect the voice agent's call log")
     ap.add_argument("--db", default="", help="path to the call log (default $YEN_DB_PATH)")
@@ -39,6 +91,8 @@ def main() -> int:
     ap.add_argument("--failed", action="store_true",
                     help="booking attempts that failed")
     ap.add_argument("--calls", action="store_true", help="recent calls")
+    ap.add_argument("--greeting", action="store_true",
+                    help="greeting performance: how many callers hung up without speaking")
     ap.add_argument("--full-numbers", action="store_true",
                     help="show unmasked phone numbers (contains guest PII)")
     ap.add_argument("--purge", type=int, metavar="DAYS",
@@ -80,6 +134,10 @@ def main() -> int:
             print(f"      reason: {r['error']}\n")
         return 0
 
+    if args.greeting:
+        print_greeting_report(store, args.days)
+        return 0
+
     if args.calls:
         for r in store.recent_calls():
             print(f"  [{r['started_at']}] {r['call_id']}  {r['outcome']}")
@@ -96,6 +154,13 @@ def main() -> int:
         print("\n  -> see details:  python scripts/calls.py --failed")
     if s["undelivered"]:
         print("  -> action needed: python scripts/calls.py --messages")
+
+    g = store.greeting_stats(since_days=args.days)
+    if g["zero_user_turn"]:
+        rate = g["zero_user_turn_rate"]
+        pct = "" if rate is None else f" ({rate * 100:.0f}%)"
+        print(f"\n  callers who never spoke {g['zero_user_turn']}{pct}")
+        print("  -> see details:  python scripts/calls.py --greeting")
     return 0
 
 

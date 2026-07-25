@@ -98,6 +98,37 @@ CREATE INDEX IF NOT EXISTS idx_attempts_failed
     ON booking_attempts (ok, created_at);
 """
 
+#: Greeting telemetry on the ``calls`` table, added after 19% of real calls were
+#: found to end with the caller never speaking (docs/GREETING_ABANDONMENT.md).
+#:
+#: Declared as ALTER TABLE migrations rather than baked into SCHEMA above,
+#: because ``CREATE TABLE IF NOT EXISTS`` is a no-op against the production
+#: database that already exists — the columns would silently never appear.
+#:
+#: A NULL here means **not measured**, which is not the same as zero. Reporting
+#: must say "not measured" rather than invent a number; that is the same rule as
+#: the module docstring — never state something the data hasn't earned.
+CALLS_TELEMETRY_COLUMNS: tuple[tuple[str, str], ...] = (
+    # ms from answering the call to the first audible word of the greeting
+    ("answer_to_first_word_ms", "INTEGER"),
+    # ms of greeting audio actually played (shorter than scripted if barged over)
+    ("greeting_ms", "INTEGER"),
+    # 1 = the caller talked over the greeting and it was cut short
+    ("greeting_interrupted", "INTEGER NOT NULL DEFAULT 0"),
+    # 1 = the caller said something at any point. 0 here IS the 19% defect.
+    ("user_spoke", "INTEGER NOT NULL DEFAULT 0"),
+    # ms from answering to the caller's first detected speech
+    ("first_user_speech_ms", "INTEGER"),
+    # language actually detected from the caller ('fr'/'en'/...), '' = unknown
+    ("detected_language", "TEXT NOT NULL DEFAULT ''"),
+    # 1 = the AI disclosure clause played to completion; 0 = it was talked over
+    # and the model was told to disclose in its first reply instead
+    ("disclosure_spoken", "INTEGER NOT NULL DEFAULT 0"),
+)
+
+#: Names only, in declaration order — the write path's allow-list.
+TELEMETRY_FIELDS: tuple[str, ...] = tuple(name for name, _ in CALLS_TELEMETRY_COLUMNS)
+
 
 def _now() -> str:
     return dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")
@@ -138,7 +169,20 @@ class CallStore:
             # WAL lets the owner read the log while a call is in progress.
             self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.executescript(SCHEMA)
+        self._migrate()
         self._conn.commit()
+
+    def _migrate(self) -> None:
+        """Add columns that post-date the original ``calls`` table.
+
+        ``CREATE TABLE IF NOT EXISTS`` does nothing to a table that already
+        exists, so a live database would never gain the greeting telemetry
+        columns without this. Idempotent, and safe to run on every start.
+        """
+        have = {r["name"] for r in self._conn.execute("PRAGMA table_info(calls)")}
+        for name, decl in CALLS_TELEMETRY_COLUMNS:
+            if name not in have:
+                self._conn.execute(f"ALTER TABLE calls ADD COLUMN {name} {decl}")
 
     # -- calls -------------------------------------------------------------
     def start_call(self, call_id: str, *, caller_number: str = "",
@@ -160,6 +204,97 @@ class CallStore:
                 (_now(), outcome, transcript, call_id),
             )
             self._conn.commit()
+
+    # -- greeting telemetry ------------------------------------------------
+    def record_greeting(self, call_id: str, **fields: object) -> None:
+        """Record what the caller actually experienced in the first seconds.
+
+        Accepts any subset of :data:`TELEMETRY_FIELDS`. **``None`` means "not
+        measured" and is skipped**, so calling this twice (once when the
+        greeting finishes, once at hang-up) accumulates rather than clobbers —
+        a later call cannot erase an earlier measurement by not having it.
+
+        Never raises into the call: telemetry going missing is a reporting
+        problem, and it must not be able to drop the phone line.
+        """
+        unknown = set(fields) - set(TELEMETRY_FIELDS)
+        if unknown:
+            raise ValueError(f"unknown telemetry field(s): {sorted(unknown)}")
+
+        pairs = [(k, v) for k, v in fields.items() if v is not None]
+        if not pairs:
+            return
+        sets = ", ".join(f"{k} = ?" for k, _ in pairs)
+        values = [int(v) if isinstance(v, bool) else v for _, v in pairs]
+        try:
+            with self._lock:
+                self._conn.execute(
+                    f"UPDATE calls SET {sets} WHERE call_id = ?", (*values, call_id)
+                )
+                self._conn.commit()
+        except Exception:  # pragma: no cover - defensive
+            logger.exception("failed to record greeting telemetry for %s", call_id)
+
+    def greeting_stats(self, *, since_days: int = 7) -> dict:
+        """The numbers behind docs/GREETING_ABANDONMENT.md, for our own line.
+
+        ``zero_user_turn_rate`` is the one to beat: 19% in the incumbent's
+        corpus, target under 10%. Averages are ``None`` when nothing was
+        measured — not 0 — because "we don't know" and "it was instant" are very
+        different answers.
+        """
+        cutoff = (dt.datetime.now(dt.timezone.utc)
+                  - dt.timedelta(days=since_days)).isoformat(timespec="seconds")
+        row = self._conn.execute(
+            """
+            SELECT COUNT(*)                                     AS calls,
+                   SUM(CASE WHEN user_spoke = 0 THEN 1 ELSE 0 END)          AS zero_user_turn,
+                   SUM(CASE WHEN greeting_interrupted = 1 THEN 1 ELSE 0 END) AS interrupted,
+                   SUM(CASE WHEN user_spoke = 1 AND disclosure_spoken = 0
+                            THEN 1 ELSE 0 END)                  AS disclosure_deferred,
+                   AVG(answer_to_first_word_ms)                 AS avg_answer_to_first_word_ms,
+                   MAX(answer_to_first_word_ms)                 AS max_answer_to_first_word_ms,
+                   AVG(greeting_ms)                             AS avg_greeting_ms,
+                   MAX(greeting_ms)                             AS max_greeting_ms,
+                   AVG(first_user_speech_ms)                    AS avg_first_user_speech_ms
+              FROM calls WHERE started_at >= ?
+            """,
+            (cutoff,),
+        ).fetchone()
+        calls = int(row["calls"] or 0)
+        langs = {
+            r["detected_language"] or "unknown": r["c"]
+            for r in self._conn.execute(
+                "SELECT detected_language, COUNT(*) c FROM calls "
+                "WHERE started_at >= ? GROUP BY detected_language ORDER BY c DESC",
+                (cutoff,),
+            )
+        }
+        zero = int(row["zero_user_turn"] or 0)
+        return {
+            "calls": calls,
+            "zero_user_turn": zero,
+            # None, not 0.0, when there is nothing to divide by.
+            "zero_user_turn_rate": (zero / calls) if calls else None,
+            "greeting_interrupted": int(row["interrupted"] or 0),
+            "disclosure_deferred": int(row["disclosure_deferred"] or 0),
+            "avg_answer_to_first_word_ms": row["avg_answer_to_first_word_ms"],
+            "max_answer_to_first_word_ms": row["max_answer_to_first_word_ms"],
+            "avg_greeting_ms": row["avg_greeting_ms"],
+            "max_greeting_ms": row["max_greeting_ms"],
+            "avg_first_user_speech_ms": row["avg_first_user_speech_ms"],
+            "languages": langs,
+        }
+
+    def silent_calls(self, *, since_days: int = 7, limit: int = 20) -> list[sqlite3.Row]:
+        """Calls where the caller never said a word — the 19%, one row each."""
+        cutoff = (dt.datetime.now(dt.timezone.utc)
+                  - dt.timedelta(days=since_days)).isoformat(timespec="seconds")
+        return self._conn.execute(
+            "SELECT * FROM calls WHERE started_at >= ? AND user_spoke = 0 "
+            "ORDER BY started_at DESC LIMIT ?",
+            (cutoff, limit),
+        ).fetchall()
 
     # -- messages & waitlist ----------------------------------------------
     def record_message(self, *, call_id: str, kind: str, name: str, phone: str,

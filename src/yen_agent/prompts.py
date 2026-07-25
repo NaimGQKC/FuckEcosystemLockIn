@@ -4,11 +4,102 @@ from __future__ import annotations
 
 from . import faq
 
-# Keep the greeting to ONE short line: it is spoken aloud, and a long greeting
-# means the caller waits ~13s before they can say anything. The AI disclosure is
-# folded in here so it never needs a second sentence.
-GREETING_EN = "Thanks for calling YEN — I'm the AI reservations assistant. How can I help?"
-GREETING_FR = "Merci d'avoir appelé YEN — je suis l'assistant IA des réservations. Comment puis-je vous aider ?"
+# =====================================================================
+# The greeting — see docs/GREETING_ABANDONMENT.md
+# =====================================================================
+# 16 of 84 real calls (19%) ended with ZERO user turns: the caller heard the
+# greeting and hung up without ever speaking. Six were under 15 seconds. That
+# loss happens before the agent does anything, so it can only be fixed here.
+#
+# Three deliberate decisions, in the order they matter:
+#
+# 1. FRENCH FIRST, NOT BILINGUAL. Roughly two-thirds of this venue's calls are
+#    in French. A francophone who hears English decides "this won't understand
+#    me" instantly. Saying it in *both* languages would make the greeting longer
+#    — which is the exact defect we are fixing — so we pick the majority
+#    language and let the STT (`YEN_LANGUAGE_MODE=multi`, Deepgram nova-3
+#    `language=multi`) switch us to English off the caller's first words.
+#    "YEN, bonjour !" is also how a Montreal restaurant actually answers the
+#    phone, so an anglophone caller is not confused by it either.
+#
+# 2. UNDER ~1.5 SECONDS TO THE USEFUL PART. The previous greeting was 14 words;
+#    a model-generated one once ran to 13 seconds. Two words is ~0.9s of audio.
+#    The caller can start talking almost immediately, which is the whole point.
+#
+# 3. THE AI DISCLOSURE IS A SEPARATE, INTERRUPTIBLE SECOND CLAUSE — see below.
+GREETING_FR = "YEN, bonjour !"
+GREETING_EN = "YEN, hello!"
+
+# ---------------------------------------------------------------------
+# The AI-disclosure tradeoff (decided here, on purpose, in writing)
+# ---------------------------------------------------------------------
+# Disclosure matters ethically, and Quebec consumer-protection expectations
+# around automated agents point the same way — so dropping it is not an option.
+# But "I'm the AI reservations assistant" was ~2 seconds of the old greeting,
+# spent in the exact window where callers hang up.
+#
+# The tension is real and there is no free answer. The three options were:
+#
+#   (a) Keep it in the first breath.  Honest, but it is the single most
+#       expensive clause in the most expensive two seconds of the call.
+#   (b) Drop it entirely.             Cheapest, and not acceptable.
+#   (c) Say it immediately AFTER the greeting, as its own utterance the caller
+#       can talk straight over — and if they DO talk over it, require the model
+#       to disclose in its first substantive reply instead.
+#
+# We chose (c). What it buys: the caller hears "YEN, bonjour !" at ~0.9s and
+# can respond at once; a caller who waits hears the disclosure at ~1.2s, which
+# is earlier than the old greeting reached it anyway.
+#
+# What it costs, stated plainly: a caller who barges in does not hear the
+# disclosure *in the first utterance*. That is why it is a separate speech
+# handle — the agent knows whether it finished playing, and when it did not,
+# `DISCLOSURE_REMINDER_*` is appended to the model's instructions so the very
+# first real answer carries it. Disclosure is deferred, never dropped.
+#
+# Assumption we cannot test on real users (documented so it can be falsified):
+# we assume a caller who interrupts a two-word greeting is engaged rather than
+# alienated, and that hearing "assistant virtuel" one turn later is materially
+# equivalent for them. `calls.greeting_interrupted` + `--greeting` in
+# scripts/calls.py make that measurable once the line is live.
+DISCLOSURE_FR = "Assistant virtuel, je vous écoute."
+DISCLOSURE_EN = "AI assistant — how can I help?"
+
+#: Appended to the running instructions when the caller talked over the
+#: disclosure clause, so it is not silently lost.
+DISCLOSURE_REMINDER_FR = (
+    "\n\n# Disclosure not yet heard\n"
+    "The caller started speaking before you finished saying you are a virtual "
+    "assistant, so assume they did NOT hear it. Work it into your very first "
+    "substantive reply, briefly and naturally — e.g. begin with "
+    "\"Bien sûr — vous parlez à un assistant virtuel.\" — then answer them. "
+    "Say it once; do not repeat it later."
+)
+DISCLOSURE_REMINDER_EN = (
+    "\n\n# Disclosure not yet heard\n"
+    "The caller started speaking before you finished saying you are an AI "
+    "assistant, so assume they did NOT hear it. Work it into your very first "
+    "substantive reply, briefly and naturally — e.g. begin with "
+    "\"Of course — you're speaking with our AI assistant.\" — then answer them. "
+    "Say it once; do not repeat it later."
+)
+
+
+def greeting_for(multilingual: bool) -> tuple[str, str]:
+    """Return ``(greeting, disclosure)`` for the configured language mode.
+
+    Two strings, not one, because they are spoken as two separate utterances:
+    the caller can interrupt between them, and the agent needs to know which of
+    the two actually reached them.
+    """
+    if multilingual:
+        return GREETING_FR, DISCLOSURE_FR
+    return GREETING_EN, DISCLOSURE_EN
+
+
+def disclosure_reminder(multilingual: bool) -> str:
+    """Instruction text to append when the disclosure clause was talked over."""
+    return DISCLOSURE_REMINDER_FR if multilingual else DISCLOSURE_REMINDER_EN
 
 
 def _faq_digest() -> str:
@@ -37,8 +128,10 @@ def system_instructions(*, multilingual: bool, today: str = "") -> str:
   listen to and make the caller wait. Never read out a list of options; offer two
   or three at most.
 - Ask ONE question at a time, then stop and let the caller answer.
-- Your greeting already states you're an AI assistant — don't repeat it. If asked,
-  confirm plainly, and offer a human or a message any time it's useful.
+- You answered the phone with a two-word greeting followed by a short line saying
+  you are a virtual/AI assistant. Assume the caller heard it — do NOT repeat it
+  unless a "Disclosure not yet heard" section appears below. If they ask, confirm
+  plainly, and offer a human or a message any time it's useful.
 - Be warm and natural, never robotic or over-explaining.
 
 # Language

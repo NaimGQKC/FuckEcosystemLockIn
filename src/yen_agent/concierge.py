@@ -24,6 +24,7 @@ from .reservation import (
     ReservationError,
     ReservationService,
 )
+from .reservation.errors import BackendUnavailableError
 
 logger = logging.getLogger(__name__)
 
@@ -59,6 +60,14 @@ MAX_ALTERNATIVES = 2
 #: How many days either side to search when a whole day is unavailable.
 ADJACENT_DAYS = (1, 2)
 
+#: Spoken when we can't even read the guest's existing reservation. Says nothing
+#: about whether it exists — because we don't know.
+_DEGRADED_LOOKUP = (
+    "I can't reach our reservation system right now, so I can't pull up your "
+    "booking. I've taken your details and the team will call you right back to "
+    "sort it out."
+)
+
 
 @dataclass
 class CallState:
@@ -73,6 +82,11 @@ class CallState:
     party_size: int = 0
     last_date: str = ""  # YYYY-MM-DD
     pending_waitlist: bool = False
+    #: Set once Libro has failed to answer during this call. It changes what the
+    #: agent is allowed to promise: "we'll text you when a table opens" is a
+    #: waitlist promise and needs a working booking system to be true. When the
+    #: backend is down the only true promise is "a human will call you back".
+    backend_degraded: bool = False
 
 
 def _booking_summary(b: Booking, *, locale: str = "en") -> str:
@@ -223,6 +237,57 @@ class Concierge:
                 logger.exception("Could not update delivery state for row %s", row_id)
         return True
 
+    # -- graceful degradation ----------------------------------------------
+    def _degrade(self, *, spoken: str, what: str, name: str = "", phone: str = "",
+                 party_size: int = 0, wanted_date: str = "",
+                 wanted_time: str = "") -> str:
+        """Libro is unreachable. Capture the caller instead of losing them.
+
+        This is the single most important path in the file, because it is the
+        one that runs when the thing most likely to break, breaks: a
+        reverse-engineered private API behind a long-lived token, on a system
+        nobody is watching.
+
+        Three rules, in order:
+
+        1. **Never claim an outcome we don't have.** We do not know whether the
+           table is free, booked, or cancelled — so we don't say.
+        2. **Get the caller into durable storage.** A name and a number in
+           SQLite is a callback the restaurant can make. A caller who hung up
+           after dead air is gone, and nobody will ever know they rang.
+        3. **If we can't even store it, say so and give them the number.** An
+           honest dead end beats a promise we can't keep — same rule as
+           ``take_message``.
+
+        ``spoken`` is the caller-facing line for the success case; it belongs to
+        the calling method because "I couldn't book that" and "I couldn't cancel
+        that" have very different consequences for the guest.
+        """
+        self.state.backend_degraded = True
+        name = name or self.state.name
+        phone = phone or self.state.phone
+        if not phone:
+            # Nothing to capture yet — ask for the one thing that makes the
+            # caller recoverable, and let the LLM route the answer to a capture
+            # tool (join_waitlist / take_message).
+            self.state.pending_waitlist = True
+            return (
+                "I'm having trouble reaching our reservation system right now, and "
+                "I don't want to tell you something I can't confirm. Can I take your "
+                "name and number so the team can call you straight back?"
+            )
+        if not self._persist(kind="callback", name=name, phone=phone, body=what,
+                             party_size=party_size, wanted_date=wanted_date,
+                             wanted_time=wanted_time):
+            return (
+                "I'm sorry — our reservation system isn't responding and I can't "
+                "save your details on my end either. I don't want to promise a "
+                f"callback I can't deliver, so please call us directly at {faq.PHONE}."
+            )
+        self.state.name = name or self.state.name
+        self.state.phone = phone
+        return spoken
+
     def _log_booking(self, *, ok: bool, booking_id: str = "", party_size: int = 0,
                      wanted_time: str = "", name: str = "", phone: str = "",
                      error: str = "") -> None:
@@ -272,6 +337,24 @@ class Concierge:
 
         try:
             availability = await self.service.check_availability(iso_date, party_size)
+        except BackendUnavailableError as exc:
+            # We cannot see the book. Saying "we're fully booked" would send away
+            # a guest the restaurant may well have room for, and the cascade
+            # below would just time out four more times doing it. Stop here and
+            # capture instead.
+            logger.warning("Availability unavailable for call %s: %s", self.call_id, exc)
+            return self._degrade(
+                what=(f"Availability check failed — party of {party_size} on {iso_date}"
+                      f"{' around ' + preferred_time if preferred_time else ''}. "
+                      "Reservation system unreachable; call the guest back."),
+                party_size=party_size, wanted_date=iso_date,
+                wanted_time=preferred_time,
+                spoken=(
+                    "I'm having trouble reaching our reservation system this second, "
+                    "so I can't see what's open. I've got your details and the team "
+                    "will call you right back about that table. Sorry about that."
+                ),
+            )
         except ReservationError as exc:
             return exc.spoken_message
 
@@ -336,6 +419,10 @@ class Concierge:
                 try:
                     avail = await self.service.check_availability(
                         candidate.isoformat(), party_size)
+                except BackendUnavailableError:
+                    # The backend is down, not this date. Trying four more dates
+                    # just buys the caller four more timeouts of silence.
+                    return None
                 except ReservationError:
                     continue
                 found = list(avail.slots)
@@ -404,7 +491,15 @@ class Concierge:
             party_size=party_size or self.state.party_size,
             preferred_time=preferred_time,
         )
-        if not self._persist(kind="waitlist", name=entry.name, phone=normalized,
+        # "We'll text you the moment a table opens" is a *waitlist* promise, and
+        # it needs a working booking system to ever come true. If Libro went dark
+        # earlier in this call we don't have a waitlist — we have a caller owed a
+        # phone call. Record it as such so the owner sees the right task.
+        degraded = self.state.backend_degraded
+        if not self._persist(kind="callback" if degraded else "waitlist",
+                             name=entry.name, phone=normalized,
+                             body=("Reservation system was unreachable during the call"
+                                   if degraded else ""),
                              party_size=entry.party_size, wanted_date=entry.date,
                              wanted_time=entry.preferred_time):
             return (
@@ -417,6 +512,10 @@ class Concierge:
         self.state.name = entry.name
         self.state.phone = normalized
         self.state.pending_waitlist = False
+        if degraded:
+            return (f"Thanks {entry.name} — I've got your details, and the team will "
+                    f"call you back at {spoken_phone(normalized)} to sort the table "
+                    "out as soon as our system is back. Anything else I can help with?")
         return (f"Perfect, thanks {entry.name} — you're on the list, and we'll text "
                 f"you at {spoken_phone(normalized)} the moment a table opens up. "
                 "Anything else I can help with?")
@@ -450,18 +549,34 @@ class Concierge:
                 note=note,
                 locale=self.locale,
             )
+        except BackendUnavailableError as exc:
+            # Libro didn't answer. We do NOT know whether a table was taken, so
+            # we say nothing about the reservation and capture the caller.
+            self._log_booking(ok=False, party_size=party_size, wanted_time=time,
+                              name=first_name, phone=normalized,
+                              error=f"{type(exc).__name__}: {exc}")
+            return self._degraded_booking(exc, time=time, party_size=party_size,
+                                          first_name=first_name, phone=normalized)
         except ReservationError as exc:
-            # Log the failure so the owner can see that a caller wanted a table
-            # and didn't get one. Silent failures are the ones that cost money.
+            # A real answer from a working backend ("that slot is gone"). Log it
+            # so the owner can see that a caller wanted a table and didn't get
+            # one — silent failures are the ones that cost money — and speak the
+            # honest reason.
             self._log_booking(ok=False, party_size=party_size, wanted_time=time,
                               name=first_name, phone=normalized,
                               error=f"{type(exc).__name__}: {exc}")
             return exc.spoken_message
         except Exception as exc:
+            # Anything unforeseen — a parse error, a plugin blowing up, a bug we
+            # haven't found. It must NOT propagate: an exception out of a tool
+            # ends the caller's turn in silence, which is the worst outcome
+            # available. Treat an unknown failure exactly like an outage.
+            logger.exception("Unexpected failure booking for call %s", self.call_id)
             self._log_booking(ok=False, party_size=party_size, wanted_time=time,
                               name=first_name, phone=normalized,
                               error=f"{type(exc).__name__}: {exc}")
-            raise
+            return self._degraded_booking(exc, time=time, party_size=party_size,
+                                          first_name=first_name, phone=normalized)
 
         self._log_booking(ok=True, booking_id=booking.id, party_size=party_size,
                           wanted_time=time, name=first_name, phone=normalized)
@@ -480,6 +595,33 @@ class Concierge:
             f"under {first_name}.{combined} Is there anything else I can help with?"
         )
 
+    def _degraded_booking(self, exc: Exception, *, time: str, party_size: int,
+                          first_name: str, phone: str) -> str:
+        """Spoken fallback when a booking could not be completed or confirmed.
+
+        Note what this deliberately does *not* say: not "you're booked", and not
+        "we're full". Either would be a guess. The caller leaves the call with a
+        real commitment (a human will ring them) and the restaurant gets a row
+        in ``booking_attempts`` plus a ``callback`` message it can action.
+        """
+        when = _spoken_time(time)
+        return self._degrade(
+            what=(f"COULD NOT CONFIRM BOOKING — party of {party_size} for {when}. "
+                  f"Reservation system unreachable ({type(exc).__name__}). "
+                  "Call the guest back and confirm or make the booking."),
+            name=first_name,
+            phone=phone,
+            party_size=party_size,
+            wanted_date=time[:10],
+            wanted_time=time,
+            spoken=(
+                "I'm having trouble reaching our reservation system right now, so I "
+                "don't want to tell you you're booked when I can't confirm it. I do "
+                f"have your details — a table for {party_size} on {when} — and the "
+                "team will call you right back to confirm it. Sorry about that."
+            ),
+        )
+
     # -- lookup ------------------------------------------------------------
     async def lookup_reservations(self, *, phone: str) -> str:
         normalized = normalize_phone(phone) or self.state.phone
@@ -488,6 +630,20 @@ class Concierge:
         self.state.phone = normalized
         try:
             bookings = await self.service.list_bookings(phone=normalized)
+        except BackendUnavailableError:
+            # "I don't see any reservations" during an outage is how a guest
+            # with a confirmed table gets told they don't have one.
+            return self._degrade(
+                what="Reservation lookup failed (system unreachable); guest asked "
+                     "about an existing booking. Call them back.",
+                phone=normalized,
+                spoken=(
+                    "I can't reach our reservation system at the moment, so I can't "
+                    "pull that up — and I don't want to tell you it isn't there when "
+                    "I simply can't see it. I've noted your number and the team will "
+                    "call you right back."
+                ),
+            )
         except ReservationError as exc:
             return exc.spoken_message
 
@@ -511,6 +667,21 @@ class Concierge:
             return ModificationRestrictedError().spoken_message
         try:
             cancelled = await self.service.cancel_booking(booking.id)
+        except BackendUnavailableError:
+            # A cancel we couldn't perform must never sound like a cancel we
+            # did. If the guest believes it's cancelled and it isn't, the
+            # restaurant holds an empty table on a full night.
+            return self._degrade(
+                what=(f"CANCELLATION NOT COMPLETED — booking {booking.id} "
+                      f"({_booking_summary(booking)}). System unreachable; the "
+                      "reservation is still live. Cancel it and confirm with the guest."),
+                phone=self.state.phone,
+                spoken=(
+                    "I couldn't reach our reservation system to cancel that, so please "
+                    "assume it's still booked for now. I've flagged it and the team "
+                    "will take care of it and confirm with you."
+                ),
+            )
         except ReservationError as exc:
             return exc.spoken_message
         return (
@@ -530,6 +701,19 @@ class Concierge:
         try:
             updated = await self.service.reschedule_booking(
                 booking.id, new_time=new_time
+            )
+        except BackendUnavailableError:
+            return self._degrade(
+                what=(f"RESCHEDULE NOT COMPLETED — booking {booking.id} to "
+                      f"{new_time}. System unreachable; the original time still "
+                      "stands. Move it and confirm with the guest."),
+                phone=self.state.phone, wanted_time=new_time,
+                wanted_date=new_time[:10],
+                spoken=(
+                    "I couldn't reach our reservation system to move that, so your "
+                    "original time still stands for now. I've flagged it and the team "
+                    "will change it and confirm with you."
+                ),
             )
         except ReservationError as exc:
             return exc.spoken_message
@@ -578,6 +762,12 @@ class Concierge:
         if booking_id:
             try:
                 return await self.service.get_booking(booking_id)
+            except BackendUnavailableError:
+                return self._degrade(
+                    what=f"Could not read booking {booking_id} (system unreachable). "
+                         "Guest wanted to change or cancel it; call them back.",
+                    spoken=_DEGRADED_LOOKUP,
+                )
             except ReservationError as exc:
                 return exc.spoken_message
         normalized = normalize_phone(phone) or self.state.phone
@@ -588,6 +778,12 @@ class Concierge:
                     b for b in await self.service.list_bookings(phone=normalized)
                     if not b.is_cancelled
                 ]
+            except BackendUnavailableError:
+                return self._degrade(
+                    what="Could not look up the guest's booking (system unreachable). "
+                         "They wanted to change or cancel it; call them back.",
+                    phone=normalized, spoken=_DEGRADED_LOOKUP,
+                )
             except ReservationError as exc:
                 return exc.spoken_message
             if not bookings:

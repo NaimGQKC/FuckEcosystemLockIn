@@ -88,6 +88,68 @@ class BookingNotFoundError(ReservationError):
     )
 
 
+class BackendUnavailableError(ReservationError):
+    """The reservation backend could not be reached, or did not answer in time.
+
+    **This class is different in kind from every other error here**, and the
+    difference is the whole reason it exists.
+
+    Every other error is a *negative answer* from a backend that is working:
+    "that slot is gone", "no such booking", "too many people". The agent can
+    safely tell the caller what happened, because it knows what happened.
+
+    This one is **no answer at all** — a DNS failure, a dead socket, a read
+    timeout, an HTTP 5xx, or a rejected token. The state of the world is
+    genuinely *unknown*. So the only honest responses are:
+
+    * never assert that a booking succeeded,
+    * never assert that a booking failed *for a reason the caller can act on*
+      ("we're full") — that is a lie that loses a paying guest,
+    * capture the caller's details durably and promise a human callback.
+
+    ``Concierge`` catches this specifically and routes to the ``_persist``
+    capture path. A captured caller is recoverable; a dropped one is not.
+    """
+
+    code = "503"
+    spoken_message = (
+        "I'm having trouble reaching our reservation system right now. Let me "
+        "take your name and number so the team can call you right back."
+    )
+
+
+class BackendAuthError(BackendUnavailableError):
+    """The backend rejected our credentials (401/403).
+
+    Subclasses :class:`BackendUnavailableError` on purpose: mid-call the
+    degradation is identical (we cannot book, so capture the caller). It is a
+    separate class only so ``scripts/healthcheck.py`` can shout "the Libro token
+    is dead" rather than "the network is flaky" — those need different fixes,
+    and the token is the single most likely thing to expire unattended.
+    """
+
+    code = "401"
+
+
+class BookingOutcomeUnknownError(BackendUnavailableError):
+    """A booking *create* was sent and never answered.
+
+    The request may have reached Libro and seated the guest, or it may not have.
+    We cannot tell, and there is no idempotency key on this API to ask with.
+
+    Therefore this is **never retried**: re-sending is how you seat one guest at
+    two tables on a Saturday night. The caller is captured for a human callback,
+    which is recoverable in both directions (confirm it, or make it).
+    """
+
+    code = "503-write"
+    spoken_message = (
+        "Our reservation system stopped responding while I was booking that, so "
+        "I can't confirm it went through. Let me take your details and the team "
+        "will call you right back to confirm."
+    )
+
+
 # Map Libro numeric codes -> exception classes.
 _CODE_REGISTRY: dict[str, type[ReservationError]] = {
     cls.code: cls
