@@ -56,8 +56,8 @@ def print_greeting_report(store, days: int) -> None:
     rate = s["zero_user_turn_rate"]
     pct = "n/a" if rate is None else f"{rate * 100:.0f}%"
     print(f"  caller never spoke         {s['zero_user_turn']}  ({pct})")
-    print(f"     baseline to beat        19%   (incumbent, 16 of 84)")
-    print(f"     target                  under 10%")
+    print("     baseline to beat        19%   (incumbent, 16 of 84)")
+    print("     target                  under 10%")
     print()
     print(f"  answer -> first word       avg {_ms(s['avg_answer_to_first_word_ms'])}"
           f"   worst {_ms(s['max_answer_to_first_word_ms'])}")

@@ -34,7 +34,9 @@ DISCLOSURE_BUDGET_S = 2.0
 
 
 def _spoken_seconds(text: str) -> float:
-    return len(text.split()) / WORDS_PER_SECOND
+    # Standalone punctuation (an em dash between clauses) is a pause, not a word.
+    words = [w for w in text.split() if any(c.isalnum() for c in w)]
+    return len(words) / WORDS_PER_SECOND
 
 
 # --------------------------------------------------------------------------
@@ -168,6 +170,39 @@ def test_sdk_say_still_accepts_allow_interruptions():
     from livekit.agents import AgentSession
 
     assert "allow_interruptions" in inspect.signature(AgentSession.say).parameters
+
+
+async def test_session_accepts_the_aec_override_without_deprecation(monkeypatch):
+    """The kwarg we rely on must exist and not be on its way out.
+
+    Async so AgentSession binds to a running loop — constructing one from a
+    plain sync test trips ``asyncio.get_event_loop()``'s own DeprecationWarning
+    rather than telling us anything about our kwarg.
+    """
+    pytest.importorskip("livekit.agents")
+    import warnings
+
+    from livekit.agents import AgentSession
+
+    from yen_agent.agent import _build_llm, _build_stt, _build_tts, _build_turn_handling
+
+    for key, val in (
+        ("DEEPGRAM_API_KEY", "fake"), ("GROQ_API_KEY", "fake"),
+        ("LIVEKIT_API_KEY", "fake"), ("LIVEKIT_API_SECRET", "fake"),
+        ("LIVEKIT_URL", "wss://fake.livekit.cloud"),
+    ):
+        monkeypatch.setenv(key, val)
+
+    settings = Settings(language_mode="multi")
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", DeprecationWarning)
+        AgentSession(
+            stt=_build_stt(settings),
+            llm=_build_llm(settings),
+            tts=_build_tts(settings),
+            turn_handling=_build_turn_handling(settings),
+            aec_warmup_duration=settings.aec_warmup_s or None,
+        )
 
 
 # --------------------------------------------------------------------------
@@ -318,8 +353,7 @@ def test_multilingual_without_livekit_credentials_warns_loudly(monkeypatch, capl
 
     with caplog.at_level("WARNING", logger="yen-agent"):
         agent_mod._build_tts(Settings(language_mode="multi"))
-    assert any("mispronounced" in r.message % r.args if r.args else "mispronounced" in r.message
-               for r in caplog.records)
+    assert any("mispronounced" in r.getMessage() for r in caplog.records)
 
 
 def test_prompts_module_documents_the_disclosure_tradeoff():

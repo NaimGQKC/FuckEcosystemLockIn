@@ -552,6 +552,7 @@ def main(argv=None) -> int:
         report.unreachable = []
         if args.json:
             print(jsonlib.dumps({"status": "misconfigured",
+                                 "exit_code": EXIT_CONFIG,
                                  "checks": report.checks}, indent=2))
         else:
             print("LIBRO_PRIVATE_TOKEN / LIBRO_PRIVATE_EMAIL are not set in .env",

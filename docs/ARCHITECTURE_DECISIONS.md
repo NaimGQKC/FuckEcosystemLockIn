@@ -80,13 +80,30 @@ cancellation, and bridging phone calls in over SIP.
 
 ---
 
-## Text-to-speech: Deepgram Aura-2 (both languages)
+## Text-to-speech: Deepgram Aura-2 in English, a multilingual voice in French
 
 **Alternatives:** ElevenLabs, Cartesia, OpenAI, Azure, AWS Polly.
 
-**Why:** Aura-2 is the cheapest good option (~$0.018/min) and shares the Deepgram key — measured **240ms to first audio** in our own logs, which is excellent. ElevenLabs sounds best but costs 3-6x.
+**Why Deepgram for English:** Aura-2 is the cheapest good option (~$0.018/min) and shares the Deepgram key — measured **240ms to first audio** in our own logs, which is excellent. ElevenLabs sounds best but costs 3-6x.
 
-**We dropped Cartesia.** It was in the stack only to give French a native voice. We never had a Cartesia key, it was never exercised in a real call, and a second TTS vendor is a second key that can expire on an unattended system. One vendor, one key, one bill. If French output turns out to sound wrong, revisit — but with evidence from a real call, not on spec.
+### ⚠️ Correction: an earlier version of this document was wrong
+
+It was headed *"Deepgram Aura-2 (both languages)"* and justified dropping Cartesia partly on the basis that Deepgram covered French. **It does not.** Verified directly against the installed plugin:
+
+```
+livekit.plugins.deepgram.models.TTSModels
+  -> 58 models, EVERY id ends in "-en". Zero non-English voices.
+```
+
+Deepgram TTS is English-only. An English voice reading *"YEN, bonjour !"* produces exactly the mangled, obviously-foreign pronunciation that makes a Québécois caller hang up — which defeats the French-first greeting it was meant to serve, at a venue where **two-thirds of calls are in French**.
+
+The original reason for dropping Cartesia still stands (we never had a key, it was never exercised in a real call, and an extra vendor account is an extra credential to expire unattended). What was wrong was the claim that Deepgram filled the gap.
+
+**The fix, and why it keeps the property we actually cared about.** In multilingual mode we route to a multilingual voice through **LiveKit Inference**, which authenticates on the **LiveKit credentials the agent already requires** — so there is still no additional vendor account and no additional key to expire. That was the real unattended-reliability concern; "one vendor" was only ever a proxy for it.
+
+Without LiveKit credentials (plain `console` mode) it falls back to Deepgram and **logs a loud warning**, because French through an English voice must be discovered in a log line, not on a live call.
+
+**Cost:** ElevenLabs-class voices run several times Deepgram's rate. At this venue's ~90 talk-minutes/month that is single-digit dollars, so it does not change the economics — but it is a real increase and worth re-checking if volume grows.
 
 **What we gave up — and this one is a real problem for Montreal.** None of the fast providers (Deepgram, ElevenLabs, Cartesia, OpenAI) has a genuine **Québécois** voice. Real fr-CA voices exist essentially only on **Azure** and **AWS Polly (Gabrielle)** — the slower stacks. So for French we may have to trade latency for sounding local. Whether a Parisian accent actually costs trust in Montreal is **untested** — worth making our own A/B once there's volume.
 

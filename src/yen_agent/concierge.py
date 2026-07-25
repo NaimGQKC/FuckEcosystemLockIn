@@ -239,8 +239,8 @@ class Concierge:
 
     # -- graceful degradation ----------------------------------------------
     def _degrade(self, *, spoken: str, what: str, name: str = "", phone: str = "",
-                 party_size: int = 0, wanted_date: str = "",
-                 wanted_time: str = "") -> str:
+                 party_size: int = 0, wanted_date: str = "", wanted_time: str = "",
+                 spoken_no_phone: str = "") -> str:
         """Libro is unreachable. Capture the caller instead of losing them.
 
         This is the single most important path in the file, because it is the
@@ -261,7 +261,9 @@ class Concierge:
 
         ``spoken`` is the caller-facing line for the success case; it belongs to
         the calling method because "I couldn't book that" and "I couldn't cancel
-        that" have very different consequences for the guest.
+        that" have very different consequences for the guest. ``spoken_no_phone``
+        is for the same reason: when we have no number to capture we still have
+        to tell a caller their cancellation did *not* happen.
         """
         self.state.backend_degraded = True
         name = name or self.state.name
@@ -271,7 +273,7 @@ class Concierge:
             # caller recoverable, and let the LLM route the answer to a capture
             # tool (join_waitlist / take_message).
             self.state.pending_waitlist = True
-            return (
+            return spoken_no_phone or (
                 "I'm having trouble reaching our reservation system right now, and "
                 "I don't want to tell you something I can't confirm. Can I take your "
                 "name and number so the team can call you straight back?"
@@ -616,9 +618,10 @@ class Concierge:
             wanted_time=time,
             spoken=(
                 "I'm having trouble reaching our reservation system right now, so I "
-                "don't want to tell you you're booked when I can't confirm it. I do "
-                f"have your details — a table for {party_size} on {when} — and the "
-                "team will call you right back to confirm it. Sorry about that."
+                "can't confirm that table — and I don't want to tell you it's done "
+                f"when I can't see it. I do have your details, a table for "
+                f"{party_size} on {when}, and the team will call you right back to "
+                "confirm it. Sorry about that."
             ),
         )
 
@@ -681,6 +684,11 @@ class Concierge:
                     "assume it's still booked for now. I've flagged it and the team "
                     "will take care of it and confirm with you."
                 ),
+                spoken_no_phone=(
+                    "I couldn't reach our reservation system to cancel that, so please "
+                    "assume it's still booked for now. What's the best number for the "
+                    "team to reach you on once it's done?"
+                ),
             )
         except ReservationError as exc:
             return exc.spoken_message
@@ -713,6 +721,11 @@ class Concierge:
                     "I couldn't reach our reservation system to move that, so your "
                     "original time still stands for now. I've flagged it and the team "
                     "will change it and confirm with you."
+                ),
+                spoken_no_phone=(
+                    "I couldn't reach our reservation system to move that, so your "
+                    "original time still stands for now. What's the best number for "
+                    "the team to reach you on once it's changed?"
                 ),
             )
         except ReservationError as exc:
