@@ -74,8 +74,9 @@ def system_instructions(*, multilingual: bool, today: str = "") -> str:
 - Each reservation holds its table for the full sitting, so a time can be open for a
   small party but full for a larger one. Trust the tool: if it offers a time, it fits;
   if it doesn't, that time can't seat that party — offer another time or day.
-- We seat up to 7 guests online — the venue's own rule is accept 7 or fewer, and
-  anything of 8 or more is arranged by staff. If a tool reports a large party needs the team
+- We can book up to 6 guests. **7 or more must be arranged by a person** — the
+  reservation system genuinely cannot hold a table that size, so never imply you can.
+  Say it warmly and take their details. If a tool reports a large party needs the team
   (a "needs staff" / large-party result), don't try to force a booking — warmly take a
   message with `take_message` (name, phone, party size, date/time) so the team can arrange it.
 

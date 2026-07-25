@@ -22,8 +22,10 @@ ADDRESS = "2157 Rue Mackay, Montréal, QC H3G 2J2"
 PHONE = "514-543-3354"
 TIMEZONE = "America/Toronto"  # their config says America/New_York; same offset
 
-#: Parties above this are arranged by staff (their "Large Reservation" rule).
-MAX_ONLINE_PARTY = 7
+#: Parties above this are arranged by staff. **6 is a Libro API ceiling**, not a
+#: policy: the availability endpoint only ever returns party sizes 1-6, so 7+
+#: cannot be checked or booked programmatically at all. See libro_private.py.
+MAX_ONLINE_PARTY = 6
 #: How long a table is held — from the venue's own booking policy.
 TURN_MINUTES_SMALL = 90   # parties under 6
 TURN_MINUTES_LARGE = 120  # parties of 7+

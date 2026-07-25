@@ -53,10 +53,21 @@ from .models import Availability, Booking, PaymentIntent, Person, TimeSlot
 ACCEPT_V1 = "application/vnd.libro-private-v1+json"   # default (JSON:API endpoints)
 ACCEPT_V2 = "application/vnd.libro-private-v2+json"   # /availabilities only
 WRITE_CONTENT_TYPE = "application/vnd.api+json"
-#: Availability exposes party sizes 1-6 only and services report max-slots: 6, so
-#: 7+ is escalated to staff. (The venue's own KB mentions a 7+ table-hold policy,
-#: so 7 may be bookable by some other path — erring toward staff is the safe side.)
-MAX_ONLINE_PARTY = 7  # venue rule: accept <=7, staff arrange 8+
+#: **6, and this is a hard API ceiling — not a policy choice.**
+#:
+#: Direct probe of GET /availabilities/{date} across 28 days (731 slots, 4,386
+#: cells): the party-size key set was ALWAYS exactly {1,2,3,4,5,6}. Forcing
+#: `&size=7` returns HTTP 200 with no "7" key in the body. Libro cannot express a
+#: party of seven, so there is nothing to check availability against and nothing
+#: to book.
+#:
+#: The incumbent's ">7 → transfer" rule is therefore NOT the binding constraint,
+#: and the venue's knowledge base line about holding tables 2h for "parties of 7+"
+#: describes a MANUAL floor process with no representation in the booking system.
+#: Anything above 6 is a human handoff by design, not a limitation to engineer
+#: around. Setting this to 7 makes the agent tell a party of seven "we're fully
+#: booked" (empty availability) instead of "let me get someone to arrange that".
+MAX_ONLINE_PARTY = 6
 #: Table turn length, from the venue's stated booking policy: 1h30 for parties
 #: under 6, 2h for 7+. The create conveys this via `expected-leave-at` (start +
 #: turn) and the server derives the start time from it; 90 min matches a captured

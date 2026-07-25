@@ -124,13 +124,16 @@ async def test_no_availability_anywhere_captures_instead_of_transferring(store):
 # We had 6 in the Libro adapter, which would have wrongly escalated parties of 7.
 # ---------------------------------------------------------------------------
 
-def test_party_of_seven_is_bookable_not_escalated():
+def test_party_ceiling_is_six_because_libro_cannot_express_seven():
+    """NOT a policy choice: a 28-day probe of /availabilities/{date} (4,386 cells)
+    only ever returned party-size keys 1-6, and forcing &size=7 returns 200 with
+    no "7" key. Setting this to 7 would make the agent tell a party of seven
+    "we're fully booked" instead of offering to have staff arrange it."""
+    from yen_agent import faq
     from yen_agent.reservation import libro_private
 
-    assert libro_private.MAX_ONLINE_PARTY == 7
-    from yen_agent import faq
-
-    assert faq.MAX_ONLINE_PARTY == 7
+    assert libro_private.MAX_ONLINE_PARTY == 6
+    assert faq.MAX_ONLINE_PARTY == 6
 
 
 # ---------------------------------------------------------------------------
