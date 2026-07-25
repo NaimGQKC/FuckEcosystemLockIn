@@ -25,9 +25,9 @@ scales off — my earlier 90 was low.
 Also worth noting: **16 of 84 calls had zero user turns.** Those still cost
 telephony and a little STT, but no LLM and almost no TTS.
 
-## What the incumbent charges: ~$250/month
+## What the incumbent charges: $200/month (confirmed from the invoice)
 
-For 102 calls. That is **~$2.45 per call**, or **~$2.25 per talk-minute** — for a
+For 102 calls. That is **~$1.96 per call**, or **~$1.80 per talk-minute** — for a
 system where, on its own data, 43% of calls end in a transfer to a human and only
 15% produce a booking.
 
@@ -49,7 +49,11 @@ The LiveKit **Build** tier is free and includes 1,000 agent minutes, 5,000 WebRT
 minutes, and **$2.50/month of Inference credit** — which covers most of the
 $2.31 of STT+LLM+TTS above. Realistically this runs at **$2–6/month**.
 
-**That is roughly 40–100× cheaper than $250/month.**
+**That is roughly 30–80× cheaper than $200/month.**
+
+**The owner's stated ceiling is $100/month.** Every scenario below sits comfortably
+under it, which means *reliability and low management burden should win over
+shaving dollars* — the difference between $5 and $55 is not worth a worse system.
 
 ### The caveat that could change it
 
@@ -60,8 +64,9 @@ of a call is precisely what produces the 19% zero-turn abandonment we are trying
 to fix.
 
 If warm agents turn out to require the **Ship** tier, that is **$50/month**, and
-the total becomes **~$55/month**. Still **4.5× cheaper than $250**, and it buys
-away all server management.
+the total becomes **~$55/month** — still **3.6× cheaper than $200**, still well
+inside the $100 ceiling, and it buys away all server management. **If warm agents
+cost $50, pay it.**
 
 **This is the single number worth confirming with LiveKit before launch.** Both
 outcomes are a large win; it only changes whether the answer is "$5" or "$55".
@@ -136,10 +141,14 @@ the promise true. No database at all. Libro remains the record for reservations.
 code, generous free tier, nothing to run. *Cost: one more account — but zero
 maintenance.*
 
-**Recommendation: A now, B if the owner ever asks for history.** A is fewer moving
-parts and directly serves "don't make me manage anything"; the SMS thread on the
-manager's phone becomes the log. B stays cheap to add later because the storage
-is already behind one module.
+**Owner's decision: B.** He is willing to accept one more account specifically to
+keep a proper record of what the agent does. That is a reasonable trade — with a
+$100/month ceiling there is no cost pressure, and losing the failed-booking log
+would remove the only way to answer *"did a reservation not get made?"*.
+
+Turso's free tier is orders of magnitude above our usage (we write roughly 100
+rows a month), so **this adds $0**. `store.py` is already SQLite, and libSQL is a
+drop-in, so the change is small and stays behind the one module.
 
 ## Honesty
 
@@ -147,8 +156,9 @@ is already behind one module.
 - The cold-start question is unresolved and is the only thing that moves the
   total materially.
 - Cartesia's French has not been heard by anyone on this project.
-- The $250 figure is the owner's recollection, and he is currently on a free
-  trial — worth confirming against an actual invoice before it is quoted anywhere.
+- The $200 figure is **confirmed from the invoice** (an earlier ~$250 was a recollection).
+- **AWS is disfavoured by the owner**, despite Polly having genuine fr-CA voices.
+  Treated as a last resort; see docs/STACK_DECISION.md for what that costs us.
 
 ## Sources
 
