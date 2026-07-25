@@ -302,11 +302,11 @@ async def test_cascade_ends_in_waitlist_capture_not_a_transfer(monkeypatch):
 
         c.service.check_availability = nothing
         msg = await c.check_availability(date=future_date(), party_size=2)
-        assert "text you" in msg.lower()
+        assert "call you back" in msg.lower()  # no auto-text exists
         assert c.state.pending_waitlist is True
         # And the caller can then be captured.
         out = c.join_waitlist(name="Dana", phone="514-555-0143", party_size=2)
-        assert "Dana" in out and "list" in out.lower()
+        assert "Dana" in out and "call you back" in out.lower()
         assert len(c.waitlist) == 1
         assert c.waitlist[0].phone == "+15145550143"
         assert c.state.pending_waitlist is False

@@ -203,7 +203,7 @@ async def test_availability_outage_asks_for_a_number_when_it_has_none(store):
 
 
 async def test_waitlist_after_an_outage_promises_a_callback_not_a_text(store):
-    """'We'll text you when a table opens' needs a working booking system."""
+    """A degraded waitlist must not even promise a callback-on-opening."""
     c = await _concierge(store)
     try:
         c.state.backend_degraded = True
@@ -226,7 +226,10 @@ async def test_normal_waitlist_still_promises_a_text(store):
     finally:
         await c.service.aclose()
 
-    assert "text you" in msg.lower()
+    # NOT "we'll text you": Libro has no future-dated waitlist and we have no
+    # opening-watcher, so a human calling back is the only true promise.
+    assert "text you" not in msg.lower()
+    assert "call you back" in msg.lower()
     assert store.pending_messages()[0].kind == "waitlist"
 
 

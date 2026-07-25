@@ -114,7 +114,7 @@ async def test_no_availability_anywhere_captures_instead_of_transferring(store):
         msg = await c.check_availability(date=future_date(), party_size=5,
                                          part_of_day="dinner", preferred_time="8")
         assert "transfer" not in msg.lower()
-        assert "text you" in msg.lower()
+        assert "call you back" in msg.lower()  # no auto-text exists
     finally:
         await c.service.aclose()
 

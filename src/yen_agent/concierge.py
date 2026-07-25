@@ -407,9 +407,14 @@ class Concierge:
 
         # ---- nothing at all: capture the caller, never dead-end ------------
         self.state.pending_waitlist = True
+        # NOT "we'll text you the moment something opens up." Nothing texts them.
+        # Libro has no future-dated waitlist at all (its waitlist is a same-day
+        # walk-in queue with no date or time field, and the button is disabled on
+        # every day except today), and we have not built an opening-watcher. The
+        # only true promise is that a person will see this and call back.
         return ("I'm sorry, we're fully booked then, and the days around it are too. "
-                "I can take your name and number and text you the moment something "
-                "opens up — would you like me to do that?")
+                "I can take your name and number and have someone call you back if "
+                "something opens up — would you like me to do that?")
 
     async def _adjacent_day(self, day: dt.date, party_size: int, part_of_day: str):
         """Look ±1 then ±2 days for an open table. Returns (date, slots) or None."""
@@ -518,9 +523,11 @@ class Concierge:
             return (f"Thanks {entry.name} — I've got your details, and the team will "
                     f"call you back at {spoken_phone(normalized)} to sort the table "
                     "out as soon as our system is back. Anything else I can help with?")
-        return (f"Perfect, thanks {entry.name} — you're on the list, and we'll text "
-                f"you at {spoken_phone(normalized)} the moment a table opens up. "
-                "Anything else I can help with?")
+        # See the note in check_availability: no automated text exists, so this
+        # says what actually happens — the request is recorded and a human calls.
+        return (f"Perfect, thanks {entry.name} — I've put your name down, and the "
+                f"team will call you back at {spoken_phone(normalized)} if something "
+                "opens up. Anything else I can help with?")
 
     # -- booking -----------------------------------------------------------
     async def book_reservation(
