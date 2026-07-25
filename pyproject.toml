@@ -25,7 +25,6 @@ agent = [
     # VAD is bundled in AgentSession and turn detection is hosted, so the
     # silero / turn-detector plugins (deprecated upstream) are not needed.
     "livekit-agents[deepgram,openai,google]>=1.6.4",
-    "
     "livekit-plugins-noise-cancellation>=0.2",
     "python-dotenv>=1.0",
 ]
