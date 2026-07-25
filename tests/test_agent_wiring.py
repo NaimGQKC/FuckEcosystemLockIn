@@ -83,7 +83,7 @@ def test_agent_registers_all_tools():
         Concierge(svc),
         instructions=system_instructions(multilingual=False, today="2026-07-24"),
     )
-    assert len(agent.tools) == 8  # + join_waitlist
+    assert len(agent.tools) == 9  # + join_waitlist, handle_takeout
 
 
 async def test_tool_exception_does_not_crash_the_call():

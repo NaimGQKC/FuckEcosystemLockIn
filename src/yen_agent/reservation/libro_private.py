@@ -56,7 +56,7 @@ WRITE_CONTENT_TYPE = "application/vnd.api+json"
 #: Availability exposes party sizes 1-6 only and services report max-slots: 6, so
 #: 7+ is escalated to staff. (The venue's own KB mentions a 7+ table-hold policy,
 #: so 7 may be bookable by some other path — erring toward staff is the safe side.)
-MAX_ONLINE_PARTY = 6
+MAX_ONLINE_PARTY = 7  # venue rule: accept <=7, staff arrange 8+
 #: Table turn length, from the venue's stated booking policy: 1h30 for parties
 #: under 6, 2h for 7+. The create conveys this via `expected-leave-at` (start +
 #: turn) and the server derives the start time from it; 90 min matches a captured

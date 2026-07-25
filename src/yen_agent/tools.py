@@ -190,3 +190,27 @@ class ReservationAgent(Agent):
             message: What the team should know / call back about.
         """
         return self.concierge.take_message(name=name, phone=phone, message=message)
+
+    @function_tool
+    @_safe
+    async def handle_takeout(self, name: str = "", phone: str = "",
+                             order: str = "", wants_callback: bool = True) -> str:
+        """Handle a caller who wants takeout, delivery, or to order food.
+
+        Use this the moment a caller mentions ordering food to pick up or have
+        delivered — do NOT try to book them a table, and do NOT just tell them to
+        use the website and leave it there.
+
+        Offer them the choice first: "You can order on our website, or I can have
+        someone call you right back to take it by phone — which would you prefer?"
+
+        Args:
+            name: Caller's name, if given.
+            phone: Callback number.
+            order: What they want to order, in their own words. Rough is fine.
+            wants_callback: True if they want a callback, False if they're happy
+                to order online themselves.
+        """
+        return self.concierge.handle_takeout(
+            name=name, phone=phone, order=order, wants_callback=wants_callback
+        )

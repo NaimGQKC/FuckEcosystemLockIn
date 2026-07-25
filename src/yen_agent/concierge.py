@@ -346,6 +346,49 @@ class Concierge:
                     return candidate.isoformat(), found
         return None
 
+    # -- takeout -----------------------------------------------------------
+    def handle_takeout(self, *, name: str = "", phone: str = "",
+                       order: str = "", wants_callback: bool = True) -> str:
+        """Capture a takeout request instead of dead-ending the caller.
+
+        Roughly **one call in six** at this venue is someone trying to order food
+        by phone (8 transfers tagged `takeout` plus ~6 more who hung up after
+        being told to use the website, out of 84 calls). The incumbent had no
+        takeout path at all, so its only moves were "go to the website" or "let
+        me transfer you" — and the transcripts show callers hanging up on both.
+
+        We can't take payment or fire an order to the kitchen. But we *can* take
+        the order details and the caller's number durably, and put them in front
+        of staff immediately — which beats both of the incumbent's options,
+        because the caller gets a callback instead of a dial tone.
+        """
+        if not wants_callback:
+            return (
+                "No problem — you can order online at any time, and it goes "
+                "straight to the kitchen. Anything else I can help with?"
+            )
+
+        normalized = normalize_phone(phone) or self.state.phone
+        if not normalized:
+            return ("I can have someone call you right back to take that order — "
+                    "what's the best number for you?")
+
+        if not self._persist(kind="takeout", name=name or self.state.name,
+                             phone=normalized, body=order or "takeout order"):
+            return (
+                "I'm sorry — I can't save that on my end right now. You can order "
+                f"online, or reach the restaurant directly at {faq.PHONE}."
+            )
+
+        self.state.phone = normalized
+        if name:
+            self.state.name = name
+        return (
+            f"Got it{', ' + name if name else ''} — I've sent your order details "
+            "to the restaurant and someone will call you right back to confirm it "
+            "and take payment. Anything else in the meantime?"
+        )
+
     # -- waitlist ----------------------------------------------------------
     def join_waitlist(self, *, name: str, phone: str, date: str = "",
                       party_size: int = 0, preferred_time: str = "") -> str:
