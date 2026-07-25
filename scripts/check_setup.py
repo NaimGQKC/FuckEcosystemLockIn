@@ -95,8 +95,6 @@ def check_env_file() -> None:
     if provider == "google":
         warn("Google's free Gemini tier allows only ~20 requests/DAY",
              "One voice conversation exhausts it. Prefer YEN_LLM_PROVIDER=groq.")
-    if os.environ.get("YEN_TTS_PROVIDER", "deepgram") == "cartesia":
-        required["CARTESIA_API_KEY"] = "https://play.cartesia.ai"
 
     for key, where in required.items():
         if _placeholder(os.environ.get(key, "")):

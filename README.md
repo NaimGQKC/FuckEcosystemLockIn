@@ -11,7 +11,7 @@ long a table is held, and **escalating oversized parties to staff** — by calli
 a deterministic seating engine rather than guessing.
 
 > **For the developer:** hand the owner
-> [`docs/OWNER_QUESTIONNAIRE.md`](docs/OWNER_QUESTIONNAIRE.md) — it collects the
+> [`docs/YEN_owner_questions.xlsx`](docs/YEN_owner_questions.xlsx) — it collects the
 > real hours, tables, and policies (with sensible defaults) needed to make the
 > agent exact. Everything runs on realistic placeholders until then.
 
@@ -138,11 +138,12 @@ a phone number for the first test; all have free tiers.
    dispatch rule at the agent. No agent code changes — a phone caller is just
    another participant. (Costs ~$1/mo for the number + per-minute usage.)
 
-**Enable French** any time: set `YEN_LANGUAGE_MODE=multi` and
-`YEN_TTS_PROVIDER=cartesia` (+ `CARTESIA_API_KEY`).
+**Enable French** any time: set `YEN_LANGUAGE_MODE=multi`. Deepgram handles both
+STT and TTS on one key — deliberately a single vendor, so there is one less key to
+expire on a system meant to run unattended.
 
 > **Model-name note:** the plugin model ids in `src/yen_agent/agent.py`
-> (Nova-3, `gemini-2.5-flash-lite`, `aura-2-thalia-en`, `sonic-2`) are the
+> (Nova-3, `aura-2-thalia-en`, and the configured LLM) are the
 > recommended stack; if a plugin version rejects one, check the provider's
 > current model list and adjust that one line.
 
@@ -154,15 +155,14 @@ English-first MVP, each layer swappable via `.env`:
 |---|---|---|
 | Framework | LiveKit Agents (Apache-2.0) | self-host worker = $0 |
 | STT | Deepgram Nova-3 (`en`) | `multi` enables FR/EN code-switching |
-| LLM | Gemini 2.5 Flash-Lite (or GPT-4o-mini) | cheap; tool-calling is simple here |
-| TTS | Deepgram Aura-2 (`en`) | switch to Cartesia Sonic for French |
+| LLM | Groq (open-weight, swappable) | see `docs/ARCHITECTURE_DECISIONS.md` |
+| TTS | Deepgram Aura-2 | same key as STT — one vendor, one bill |
 | Telephony (Phase 2) | Twilio Canadian local number → LiveKit SIP | LiveKit phone numbers are US-only |
 
 ### Enabling French (auto-detected, including Québec French)
 
 ```dotenv
 YEN_LANGUAGE_MODE=multi      # Nova-3 Multilingual STT + French greeting/locale
-YEN_TTS_PROVIDER=cartesia    # Sonic for native French TTS (+ CARTESIA_API_KEY)
 ```
 
 No architecture change — the agent detects the caller's language from their first
@@ -286,9 +286,8 @@ src/yen_agent/
   prompts.py / faq.py  # system prompt + Yen FAQ knowledge base
   config.py            # env-driven settings
 scripts/demo.py        # text-mode walkthrough of the reservation reasoning
-tests/                 # 59 tests, run with no cloud services
-docs/OWNER_QUESTIONNAIRE.md  # questions for the restaurant owner (hand this off)
-docs/LIBRO_CONTRACT.md       # the JSON:API subset the mock mirrors + caveats
+tests/                 # 93 tests, run with no cloud services and no API keys
+docs/YEN_owner_questions.xlsx  # questions for the restaurant owner (hand this off)
 ```
 
 ## Disclosure

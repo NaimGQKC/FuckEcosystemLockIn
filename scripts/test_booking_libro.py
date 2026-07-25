@@ -1,5 +1,17 @@
 """Controlled ONE-booking test against the live Libro floor — then cancels it.
 
+╔══════════════════════════════════════════════════════════════════════════╗
+║  STANDING RULE FROM THE OWNER — applies to every live write, forever.     ║
+║                                                                          ║
+║   1. Book FAR into the future (default: 2031). If a cancel ever fails,   ║
+║      a stray booking must not be able to collide with a real guest.      ║
+║   2. ALWAYS cancel it in the same run.                                   ║
+║   3. ALWAYS report back the booking id + a link the owner can open to    ║
+║      confirm with their own eyes that it is gone.                        ║
+║                                                                          ║
+║  Never create a live booking for a near-term date to "test something".   ║
+╚══════════════════════════════════════════════════════════════════════════╝
+
 This is the single deliberate write needed to confirm the exact `POST /bookings`
 shape (required fields, status enum). It is safe by construction:
 
@@ -49,10 +61,15 @@ def _load_env() -> None:
             return
 
 
+#: Owner's standing rule: test bookings go FAR into the future, so that if a
+#: cancellation ever fails, the stray booking cannot collide with a real guest.
+TEST_BOOKING_YEAR = 2031
+
+
 def _default_date() -> str:
-    # ~45 days out, nudged to a Tuesday (usually quiet) for an off-peak test.
-    d = dt.date.today() + dt.timedelta(days=45)
-    d += dt.timedelta(days=(1 - d.weekday()) % 7)  # next Tuesday on/after
+    """A far-future, off-peak Tuesday — see TEST_BOOKING_YEAR."""
+    d = dt.date(TEST_BOOKING_YEAR, 3, 1)
+    d += dt.timedelta(days=(1 - d.weekday()) % 7)  # first Tuesday on/after
     return d.isoformat()
 
 

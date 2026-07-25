@@ -1,9 +1,13 @@
 """Reservation backend abstraction.
 
 The agent's tools depend only on :class:`ReservationService` (see ``base.py``).
-``MockReservationService`` and ``LibroReservationService`` are interchangeable
-implementations, so moving from the POC mock to real Libro is a one-line
-dependency-injection change.
+
+Two implementations exist:
+
+* ``LibroPrivateReservationService`` — **the production backend.** Talks to the
+  real Libro dashboard API and books real tables.
+* ``MockReservationService`` — a local fake, used *only* so the test suite can
+  run offline with no API keys. It is never used against real customers.
 """
 
 from .base import ReservationService
@@ -71,14 +75,7 @@ def build_service(settings=None):
             base_url=settings.libro_private_base_url,
         )
 
-    if backend == "libro":
-        from .libro import LibroReservationService
-
-        return LibroReservationService(
-            base_url=settings.libro_base_url,
-            client_id=settings.libro_client_id,
-            client_secret=settings.libro_client_secret,
-            restaurant_id=settings.libro_restaurant_id,
-        )
-
-    raise ValueError(f"Unknown reservation backend: {backend!r}")
+    raise ValueError(
+        f"Unknown reservation backend: {backend!r} "
+        "(expected 'mock', 'mock-http', or 'libro-private')"
+    )

@@ -40,13 +40,8 @@ from livekit.agents import (
 # import time and requires that to happen on the main thread. Importing them
 # lazily inside a builder (which runs in the job worker thread) raises
 # "Plugins must be registered on the main thread". deepgram/google/openai ship
-# with the [agent] extra; cartesia and noise_cancellation are optional.
+# with the [agent] extra; noise_cancellation is optional.
 from livekit.plugins import deepgram, google, openai
-
-try:
-    from livekit.plugins import cartesia
-except Exception:  # pragma: no cover - optional plugin
-    cartesia = None
 
 try:
     from livekit.plugins import noise_cancellation
@@ -121,13 +116,11 @@ def _build_llm(settings: Settings):
 
 
 def _build_tts(settings: Settings):
-    if settings.tts_provider == "cartesia":
-        if cartesia is None:
-            raise RuntimeError(
-                "YEN_TTS_PROVIDER=cartesia but livekit-plugins-cartesia isn't "
-                'installed. Run: pip install -e ".[agent]"'
-            )
-        return cartesia.TTS(model="sonic-2", language="fr" if settings.is_multilingual else "en")
+    """Deepgram Aura-2 — one vendor for both STT and TTS, on one API key.
+
+    Deliberately single-provider: every extra vendor is another key that can
+    expire and another bill that can fail on a system meant to run unattended.
+    """
     return deepgram.TTS(model="aura-2-thalia-en")
 
 

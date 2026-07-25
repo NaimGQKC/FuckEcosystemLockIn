@@ -11,7 +11,7 @@ Bill 96 makes French service a statutory right in Quebec.
 
 Known gap: the venue has never answered its **cancellation/refund policy**, and
 that single blank drove multiple human transfers in their call data. It is the
-top item in docs/OWNER_QUESTIONNAIRE.md.
+top item in docs/YEN_owner_questions.xlsx.
 """
 
 from __future__ import annotations

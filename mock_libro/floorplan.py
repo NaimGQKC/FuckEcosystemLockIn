@@ -1,14 +1,23 @@
-"""Floor plan, service hours, and the table-assignment engine for Yen.
+"""Table-assignment engine for the LOCAL FAKE restaurant. Not production.
 
-This is where the restaurant's *physical* reality lives, and it is deliberately
-deterministic: an LLM should never do table math. The voice agent reasons about
-seating by *calling* this engine (via the reservation API) and narrating the
-result — "I can seat 6 by combining two tables at 7 PM", or "a party of 10 needs
-our team to arrange — let me take a message."
+    ⚠️  THE TABLE LAYOUT BELOW IS INVENTED. It is NOT YEN's real floor plan.
+        Nobody has ever confirmed YEN's table inventory with the owner.
 
-Modeled facts (YEN Cuisine Japonaise, 2157 Rue Mackay, Montreal — an intimate
-downtown room). Table inventory and turn times are realistic placeholders that
-should be confirmed with the restaurant; hours are from public listings.
+    ⚠️  THIS ENGINE NEVER RUNS IN PRODUCTION. The live backend is
+        `LibroPrivateReservationService`, and **Libro does its own seating** —
+        we ask "can you fit 8 at 7 PM?" and Libro answers. We never see tables.
+        Nothing in this file is imported by the live path.
+
+So: the "combined table" behaviour you can see in `scripts/demo.py` proves *our
+engine* works. It does **not** prove anything about how YEN's dining room is
+actually run. Don't cite it as evidence about the real restaurant.
+
+Why keep it at all: the test suite needs a backend that can realistically refuse
+a booking, so it can run offline in ~6s with no API keys and no live writes to a
+real restaurant. A fake that just says yes to everything would test nothing.
+
+Design note that *does* carry over to production: table math is deterministic
+Python, never an LLM. Same input, same output, unit-testable.
 
 Key concepts encoded here:
   * Tables have capacities; some belong to a *combinable group* and can be

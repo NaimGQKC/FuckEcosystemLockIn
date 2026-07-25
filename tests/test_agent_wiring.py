@@ -62,11 +62,11 @@ def test_console_mode_without_livekit_creds_falls_back_to_vad(monkeypatch):
     assert "turn_detection" not in opts  # VAD fallback, no crash at call time
 
 
-def test_multilingual_cartesia_session_constructs(monkeypatch):
+def test_multilingual_session_constructs(monkeypatch):
     from yen_agent.config import Settings
 
     _build_session(
-        Settings(language_mode="multi", tts_provider="cartesia"),
+        Settings(language_mode="multi"),
         with_livekit_creds=True,
         monkeypatch=monkeypatch,
     )
