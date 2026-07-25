@@ -113,6 +113,72 @@ def resolve_date(text: str, *, today: dt.date | None = None) -> dt.date | None:
     return None
 
 
+def resolve_time(text: str) -> tuple[int, int] | None:
+    """Parse a spoken time into (hour24, minute), or None.
+
+    Applies the restaurant AM/PM rule that matters most on the phone: **an hour of
+    1-8 with no other context is ALWAYS PM.** A caller saying "seven" means 19:00
+    with overwhelming probability; defaulting to AM books breakfast at a venue that
+    doesn't serve it. AM is used only when stated, or when the hour is 9-11 with no
+    other signal.
+    """
+    if not text:
+        return None
+    s = text.strip().lower()
+
+    # Negative lookbehind for a letter (not \b) so "7am"/"7pm" match — a digit
+    # followed by a letter is not a word boundary.
+    explicit_pm = bool(re.search(r"(?<![a-z])(pm|p\.m\.?)\b", s)
+                       or re.search(r"\b(dinner|supper|tonight|evening|soir)\b", s))
+    explicit_am = bool(re.search(r"(?<![a-z])(am|a\.m\.?)\b", s)
+                       or re.search(r"\b(breakfast|morning|matin)\b", s))
+    noonish = bool(re.search(r"\b(noon|midi|lunch|midday)\b", s))
+
+    # "7:30" / "7h30" first, then a bare hour. No trailing \b — it would fail on
+    # "7pm" (digit followed by a letter is not a word boundary).
+    m = re.search(r"\b(\d{1,2})\s*[:h.]\s*(\d{2})", s) or re.search(r"\b(\d{1,2})", s)
+    if m:
+        hour = int(m[1])
+        minute = int(m[2]) if m.lastindex and m.lastindex >= 2 else 0
+    else:
+        # Spelled-out hours — STT usually emits digits, but not always.
+        words = {
+            "one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6,
+            "seven": 7, "eight": 8, "nine": 9, "ten": 10, "eleven": 11,
+            "twelve": 12, "midi": 12,
+            # French — Québec callers say "dix-huit heures", never "6 PM".
+            "une": 1, "deux": 2, "trois": 3, "quatre": 4, "cinq": 5,
+            "sept": 7, "huit": 8, "neuf": 9, "onze": 11, "douze": 12,
+            "treize": 13, "quatorze": 14, "quinze": 15, "seize": 16,
+            "dix-sept": 17, "dix-huit": 18, "dix-neuf": 19, "vingt": 20,
+            "vingt-et-une": 21, "vingt-deux": 22, "dix": 10,
+        }
+        w = re.search(r"\b(" + "|".join(words) + r")\b", s)
+        if not w:
+            return (12, 0) if noonish else None
+        hour, minute = words[w[1]], 0
+        if re.search(r"\b(thirty|et demie|half)\b", s):
+            minute = 30
+        elif re.search(r"\b(quarter|et quart)\b", s):
+            minute = 15
+    if not (0 <= hour <= 23 and 0 <= minute <= 59):
+        return None
+
+    if hour > 12:  # already 24-hour
+        return (hour, minute)
+    if explicit_am:
+        return (0 if hour == 12 else hour, minute)
+    if explicit_pm:
+        return (12 if hour == 12 else hour + 12, minute)
+    if hour == 12:
+        return (12, minute)
+    if 1 <= hour <= 8:
+        return (hour + 12, minute)  # the rule: 1-8 with no context is PM
+    if noonish and hour <= 2:
+        return (hour + 12, minute)
+    return (hour, minute)  # 9-11 with no context stays AM
+
+
 def infer_part_of_day(text: str) -> str:
     """Guess 'lunch' or 'dinner' from phrasing; '' if unclear."""
     s = (text or "").lower()

@@ -12,7 +12,7 @@ import datetime as dt
 from dataclasses import dataclass, field
 
 from . import datetime_resolve, faq
-from .phone import normalize_phone
+from .phone import normalize_phone, spoken_phone
 from .reservation import (
     Availability,
     Booking,
@@ -32,6 +32,29 @@ class Message:
 
 
 @dataclass
+class WaitlistEntry:
+    """A caller we couldn't seat — captured instead of being dumped on a human.
+
+    This is the whole point of the availability cascade: a "we're fully booked"
+    call is a lead, not a dead end.
+    """
+
+    name: str
+    phone: str
+    date: str
+    party_size: int
+    preferred_time: str = ""
+
+
+#: How far from the requested time we'll offer alternatives before widening.
+NEAR_MISS_MINUTES = 30
+#: How many alternative times to speak. More than two is unusable on a phone.
+MAX_ALTERNATIVES = 2
+#: How many days either side to search when a whole day is unavailable.
+ADJACENT_DAYS = (1, 2)
+
+
+@dataclass
 class CallState:
     """What we've learned during this call, so the agent doesn't re-ask.
 
@@ -43,6 +66,7 @@ class CallState:
     phone: str = ""  # normalized E.164
     party_size: int = 0
     last_date: str = ""  # YYYY-MM-DD
+    pending_waitlist: bool = False
 
 
 def _booking_summary(b: Booking, *, locale: str = "en") -> str:
@@ -78,6 +102,59 @@ def _spoken_time(iso_time: str) -> str:
     return f"{_spoken_date(iso_time)} at {hour % 12 or 12}:{minute} {suffix}"
 
 
+def _spoken_weekday(iso_date: str) -> str:
+    """Render '2026-06-28' as 'Sunday the 28th' — clearer than a bare date on a call."""
+    try:
+        d = dt.date.fromisoformat(iso_date)
+    except ValueError:
+        return iso_date
+    return f"{d.strftime('%A')} the {d.day}"
+
+
+def _hhmm(iso_time: str) -> tuple[int, int] | None:
+    try:
+        return int(iso_time[11:13]), int(iso_time[14:16])
+    except (ValueError, IndexError):
+        return None
+
+
+def _clock(hm: tuple[int, int]) -> str:
+    hour, minute = hm
+    suffix = "AM" if hour < 12 else "PM"
+    return f"{hour % 12 or 12}:{minute:02d} {suffix}"
+
+
+def _speak_list(items: list[str]) -> str:
+    """Join for speech: 'a', 'a and b', 'a, b and c'."""
+    items = [i for i in items if i]
+    if not items:
+        return ""
+    if len(items) == 1:
+        return items[0]
+    return ", ".join(items[:-1]) + f" and {items[-1]}"
+
+
+def _nearest(slots, wanted: tuple[int, int], *, within: int, prefer_later: bool):
+    """The closest open slots to `wanted`, nearest first, capped at MAX_ALTERNATIVES.
+
+    Ties break toward *later* at dinner: a caller who asked for 7 is generally
+    happier at 7:30 than 6:30 (they have plans before, not after).
+    """
+    target = wanted[0] * 60 + wanted[1]
+    scored = []
+    for s in slots:
+        hm = _hhmm(s.time)
+        if hm is None:
+            continue
+        delta = (hm[0] * 60 + hm[1]) - target
+        if abs(delta) <= within:
+            # Nudge earlier options behind later ones when preferring later.
+            bias = 1 if (prefer_later and delta < 0) else 0
+            scored.append(((abs(delta), bias), s))
+    scored.sort(key=lambda x: x[0])
+    return [s for _, s in scored[:MAX_ALTERNATIVES]]
+
+
 class Concierge:
     def __init__(
         self,
@@ -90,11 +167,13 @@ class Concierge:
         self.locale = locale
         self.today = today or dt.date.today()
         self.messages: list[Message] = []
+        self.waitlist: list[WaitlistEntry] = []
         self.state = CallState()
 
     # -- availability ------------------------------------------------------
     async def check_availability(
-        self, *, date: str, party_size: int, part_of_day: str = ""
+        self, *, date: str, party_size: int, part_of_day: str = "",
+        preferred_time: str = "",
     ) -> str:
         resolved = datetime_resolve.resolve_date(date, today=self.today)
         if resolved is None and self.state.last_date:
@@ -129,42 +208,98 @@ class Concierge:
             return exc.spoken_message
 
         slots = list(availability.slots)
-        want = part_of_day.strip().lower()
-        if want in ("lunch", "dinner"):
-            filtered = [s for s in slots if s.experience_name.lower() == want]
-            # Only narrow if it leaves something; otherwise fall back to all.
+        if part_of_day in ("lunch", "dinner"):
+            filtered = [s for s in slots if s.experience_name.lower() == part_of_day]
             if filtered:
                 slots = filtered
-        availability = Availability(
-            date=availability.date, party_size=availability.party_size, slots=slots
-        )
 
-        if not availability.is_available:
-            return (
-                f"I'm sorry, I don't see any open tables for {party_size} on "
-                f"{_spoken_date(iso_date)}. Would another day work?"
-            )
+        # ---- the cascade: never leave a caller with nothing ----------------
+        wanted = datetime_resolve.resolve_time(preferred_time) if preferred_time else None
 
-        labels = [s.label for s in availability.slots]
-        # Offer a manageable spoken set rather than reading a long list.
-        shown = labels[:5]
-        remaining = len(labels) - len(shown)
-        if remaining > 0:
-            listed = ", ".join(shown) + f", plus {remaining} more times"
-        elif len(shown) > 1:
-            listed = ", ".join(shown[:-1]) + f", and {shown[-1]}"
-        else:
-            listed = shown[0]
-        more = ""
-        merged = any(s.is_merged for s in availability.slots)
-        merge_note = (
-            f" For a party of {party_size} we'd set up a combined table."
-            if merged else ""
+        if slots and wanted is not None:
+            exact = [s for s in slots if _hhmm(s.time) == wanted]
+            if exact:
+                self.state.last_date = iso_date
+                return (f"Yes — {exact[0].label} on {_spoken_date(iso_date)} is available "
+                        f"for {party_size}. Shall I book that?")
+            near = _nearest(slots, wanted, within=NEAR_MISS_MINUTES,
+                            prefer_later=(part_of_day == "dinner"))
+            if near:
+                return (f"{_clock(wanted)} isn't open, but I have "
+                        f"{_speak_list([s.label for s in near])} on "
+                        f"{_spoken_date(iso_date)}. Would either of those work?")
+            # Nothing close — widen to the rest of that day before giving up.
+            spread = _nearest(slots, wanted, within=24 * 60,
+                              prefer_later=(part_of_day == "dinner"))
+            if spread:
+                return (f"{_clock(wanted)} isn't available. The closest I have that day "
+                        f"is {_speak_list([s.label for s in spread])}. Would one of those work?")
+
+        if slots:
+            labels = [s.label for s in slots]
+            shown = labels[:MAX_ALTERNATIVES + 1]
+            merged = any(s.is_merged for s in slots)
+            merge_note = (f" For a party of {party_size} we'd set up a combined table."
+                          if merged else "")
+            return (f"For {party_size} on {_spoken_date(iso_date)} I have "
+                    f"{_speak_list(shown)}.{merge_note} Which would you like?")
+
+        # ---- nothing that day: try adjacent days ---------------------------
+        alt = await self._adjacent_day(resolved, party_size, part_of_day)
+        if alt:
+            alt_date, alt_slots = alt
+            return (f"We're fully booked on {_spoken_date(iso_date)}. I do have "
+                    f"{_speak_list([s.label for s in alt_slots[:MAX_ALTERNATIVES]])} on "
+                    f"{_spoken_weekday(alt_date)} instead — would that work?")
+
+        # ---- nothing at all: capture the caller, never dead-end ------------
+        self.state.pending_waitlist = True
+        return ("I'm sorry, we're fully booked then, and the days around it are too. "
+                "I can take your name and number and text you the moment something "
+                "opens up — would you like me to do that?")
+
+    async def _adjacent_day(self, day: dt.date, party_size: int, part_of_day: str):
+        """Look ±1 then ±2 days for an open table. Returns (date, slots) or None."""
+        for offset in ADJACENT_DAYS:
+            for delta in (offset, -offset):
+                candidate = day + dt.timedelta(days=delta)
+                if datetime_resolve.validate_horizon(candidate, today=self.today):
+                    continue
+                try:
+                    avail = await self.service.check_availability(
+                        candidate.isoformat(), party_size)
+                except ReservationError:
+                    continue
+                found = list(avail.slots)
+                if part_of_day in ("lunch", "dinner"):
+                    same = [s for s in found if s.experience_name.lower() == part_of_day]
+                    found = same or found
+                if found:
+                    return candidate.isoformat(), found
+        return None
+
+    # -- waitlist ----------------------------------------------------------
+    def join_waitlist(self, *, name: str, phone: str, date: str = "",
+                      party_size: int = 0, preferred_time: str = "") -> str:
+        """Capture a caller we couldn't seat, instead of transferring them."""
+        normalized = normalize_phone(phone) or self.state.phone
+        if not normalized:
+            return "What's the best number to reach you on?"
+        resolved = datetime_resolve.resolve_date(date, today=self.today) if date else None
+        entry = WaitlistEntry(
+            name=name or self.state.name,
+            phone=normalized,
+            date=resolved.isoformat() if resolved else self.state.last_date,
+            party_size=party_size or self.state.party_size,
+            preferred_time=preferred_time,
         )
-        return (
-            f"For {party_size}, I have {listed}{more}.{merge_note} "
-            "Which time would you like?"
-        )
+        self.waitlist.append(entry)
+        self.state.name = entry.name
+        self.state.phone = normalized
+        self.state.pending_waitlist = False
+        return (f"Perfect, thanks {entry.name} — you're on the list, and we'll text "
+                f"you at {spoken_phone(normalized)} the moment a table opens up. "
+                "Anything else I can help with?")
 
     # -- booking -----------------------------------------------------------
     async def book_reservation(

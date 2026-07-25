@@ -46,21 +46,53 @@ class ReservationAgent(Agent):
     @function_tool
     @_safe
     async def check_availability(
-        self, date: str, party_size: int, part_of_day: str = ""
+        self, date: str, party_size: int, part_of_day: str = "",
+        preferred_time: str = "",
     ) -> str:
         """Check open reservation times at Yen.
+
+        Always pass `preferred_time` when the caller named one — the system then
+        confirms that exact time, or offers the closest alternatives, or another
+        day, or captures them for a callback. Never tell a caller we're full
+        without calling this first.
 
         Args:
             date: The date the caller wants. Pass their words ("this Friday",
                 "tomorrow", "July 5") or an absolute YYYY-MM-DD — the system
                 resolves it relative to today either way.
             party_size: Number of guests.
-            part_of_day: Optional — "lunch" or "dinner" to narrow results when the
-                caller asks about a specific service (e.g. "this evening" -> "dinner").
-                Leave empty to see all seatings that day.
+            part_of_day: Optional — "lunch" or "dinner" (or "evening"/"tonight"/
+                "noon"; they're understood). Leave empty for all seatings that day.
+            preferred_time: The time the caller asked for, in their words ("7",
+                "7:30", "half past eight"). An hour of 1-8 is treated as PM.
         """
         return await self.concierge.check_availability(
-            date=date, party_size=party_size, part_of_day=part_of_day
+            date=date, party_size=party_size, part_of_day=part_of_day,
+            preferred_time=preferred_time,
+        )
+
+    @function_tool
+    @_safe
+    async def join_waitlist(
+        self, name: str, phone: str, date: str = "", party_size: int = 0,
+        preferred_time: str = "",
+    ) -> str:
+        """Add the caller to the waitlist when we're fully booked.
+
+        Use this INSTEAD of taking a generic message when the reason we can't help
+        is that there's no table — we'll text them if one opens up. Only fall back
+        to `take_message` if they'd rather speak to a person.
+
+        Args:
+            name: Caller's name.
+            phone: Their callback number, any format.
+            date: The date they wanted (their words are fine).
+            party_size: Number of guests.
+            preferred_time: The time they originally asked for.
+        """
+        return self.concierge.join_waitlist(
+            name=name, phone=phone, date=date, party_size=party_size,
+            preferred_time=preferred_time,
         )
 
     @function_tool

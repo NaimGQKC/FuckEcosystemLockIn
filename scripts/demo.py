@@ -60,6 +60,28 @@ async def main() -> None:
                    c.book_reservation(time=f"{date}T19:00:00{TZ}", party_size=8,
                                       first_name="Sam", phone="+15145558001"))
 
+    # --- the cascade: what happens when we can't give them what they asked for
+    line("CALLER", "Do you have 7 o'clock?")
+    await scenario("Exact time requested (note: '7' is read as 7 PM, not 7 AM)",
+                   c.check_availability(date=date, party_size=2,
+                                        part_of_day="dinner", preferred_time="7"))
+
+    from yen_agent.reservation.models import Availability as _A
+
+    async def _full(d, size):
+        return _A(date=d, party_size=size, slots=[])
+
+    real_check = c.service.check_availability
+    c.service.check_availability = _full
+    line("CALLER", "What about Friday at 8?")
+    await scenario("Fully booked everywhere -> capture, never a dead-end transfer",
+                   c.check_availability(date=date, party_size=2,
+                                        part_of_day="dinner", preferred_time="8"))
+    print(c.join_waitlist(name="Sam", phone="514-555-0143", party_size=2,
+                          preferred_time="8"))
+    print(f"[waitlist captures: {len(c.waitlist)}]")
+    c.service.check_availability = real_check
+
     line("CALLER", "We're actually a group of 14 for a birthday.")
     await scenario("Availability — party of 14 (beyond the room -> staff)",
                    c.check_availability(date=date, party_size=14))

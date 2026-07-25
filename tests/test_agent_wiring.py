@@ -72,7 +72,7 @@ def test_multilingual_cartesia_session_constructs(monkeypatch):
     )
 
 
-def test_agent_registers_all_seven_tools():
+def test_agent_registers_all_tools():
     from yen_agent.concierge import Concierge
     from yen_agent.prompts import system_instructions
     from yen_agent.reservation.mock import MockReservationService
@@ -83,7 +83,7 @@ def test_agent_registers_all_seven_tools():
         Concierge(svc),
         instructions=system_instructions(multilingual=False, today="2026-07-24"),
     )
-    assert len(agent.tools) == 7
+    assert len(agent.tools) == 8  # + join_waitlist
 
 
 async def test_tool_exception_does_not_crash_the_call():
