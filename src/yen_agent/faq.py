@@ -1,82 +1,152 @@
-"""YEN Cuisine Japonaise — FAQ knowledge base.
+"""YEN Cuisine Japonaise — knowledge base.
 
-Facts below are drawn from public listings (the restaurant's site, OpenTable,
-Yelp, Tourisme Montréal) as of mid-2026:
+**These are the venue's REAL answers**, recovered from the knowledge base the
+restaurant actually maintains (SadieAI tenant 37487, captured 25 Jul 2026). Do not
+invent or "improve" them — a plausible-sounding wrong answer is worse than no
+answer. If a caller asks something not covered here, the agent must take a message
+rather than guess (see prompts.py).
 
-  YEN Cuisine Japonaise — 2157 Rue Mackay, Montréal, QC H3G 2J2  (downtown / Ville-Marie)
-  (514) 543-3354 — refined Japanese cuisine, open since 2018, intimate room
-  Lunch: Mon-Sat ~11:30-14:30   Dinner: daily ~17:00-21:30
+French is Québécois register: **always "vous", never "tu"**; "ça" not "cela".
+Bill 96 makes French service a statutory right in Quebec.
 
-Hours and policies on third-party sites occasionally disagree, so **confirm the
-exact current hours and any deposit/large-group policy with the restaurant
-before go-live.** The agent must only state facts present here; anything else is
-deferred to a human / message. The "up to 8 guests" figure mirrors the online
-booking cap enforced by the floor-plan engine (mock_libro/floorplan.py).
+Known gap: the venue has never answered its **cancellation/refund policy**, and
+that single blank drove multiple human transfers in their call data. It is the
+top item in docs/OWNER_QUESTIONNAIRE.md.
 """
 
 from __future__ import annotations
 
+# -- Venue facts (single source of truth) ------------------------------------
+VENUE_NAME = "YEN Cuisine Japonaise"
+ADDRESS = "2157 Rue Mackay, Montréal, QC H3G 2J2"
+PHONE = "514-543-3354"
+TIMEZONE = "America/Toronto"  # their config says America/New_York; same offset
+
+#: Parties above this are arranged by staff (their "Large Reservation" rule).
+MAX_ONLINE_PARTY = 7
+#: How long a table is held — from the venue's own booking policy.
+TURN_MINUTES_SMALL = 90   # parties under 6
+TURN_MINUTES_LARGE = 120  # parties of 7+
+LARGE_PARTY_THRESHOLD = 6
+
 FAQ: dict[str, dict[str, str]] = {
     "hours": {
-        "en": (
-            "We serve lunch Monday through Saturday from 11:30 in the morning to "
-            "2:30 in the afternoon, and dinner every evening from 5 to 9:30."
-        ),
-        "fr": (
-            "Nous servons le dîner du lundi au samedi de 11 h 30 à 14 h 30, et le "
-            "souper tous les soirs de 17 h à 21 h 30."
-        ),
+        "en": ("We're open for lunch Monday through Saturday, 11:30 to 2:30, and "
+               "for dinner every night from 5 to 9:30."),
+        "fr": ("Nous sommes ouverts pour le dîner du lundi au samedi, de 11 h 30 à "
+               "14 h 30, et pour le souper tous les soirs de 17 h à 21 h 30."),
     },
     "location": {
-        "en": (
-            "We're at 2157 Mackay Street in downtown Montreal, near Concordia. "
-            "I can text you the address if that helps."
-        ),
-        "fr": (
-            "Nous sommes au 2157, rue Mackay, au centre-ville de Montréal, près de "
-            "Concordia. Je peux vous envoyer l'adresse par texto si vous voulez."
-        ),
+        "en": f"We're at {ADDRESS} — on Mackay, in downtown Montreal.",
+        "fr": "Nous sommes au 2157, rue Mackay, au centre-ville de Montréal.",
+    },
+    "directions": {
+        "en": f"We're at {ADDRESS}. I can text you a map link if that helps.",
+        "fr": "Nous sommes au 2157, rue Mackay. Je peux vous envoyer un lien vers la carte par texto.",
     },
     "parking": {
-        "en": "There's paid street parking on Mackay and nearby, plus public garages a short walk away.",
-        "fr": "Il y a du stationnement payant sur Mackay et à proximité, ainsi que des stationnements publics à quelques pas.",
+        "en": "There's limited street parking available through the city.",
+        "fr": "Il y a un stationnement de rue limité, géré par la ville.",
     },
-    "menu": {
-        "en": (
-            "We serve refined, authentic Japanese cuisine with a modern touch — "
-            "seasonal dishes, sushi, and small plates. We can accommodate most "
-            "dietary needs with a little notice."
-        ),
-        "fr": (
-            "Nous offrons une cuisine japonaise authentique et raffinée avec une "
-            "touche moderne — des plats de saison, des sushis et des petites "
-            "assiettes. Nous pouvons accommoder la plupart des régimes sur préavis."
-        ),
+    "accessibility": {
+        "en": ("I should mention there are four or five steps going down — our unit "
+               "is in the sub-basement of the building."),
+        "fr": ("Je dois vous mentionner qu'il y a quatre ou cinq marches à descendre — "
+               "notre local est au sous-sol du bâtiment."),
     },
     "dietary": {
-        "en": "Let us know about vegetarian, vegan, or allergy needs in advance and we'll do our best — just add a note to the reservation.",
-        "fr": "Indiquez-nous à l'avance vos besoins végétariens, végétaliens ou allergies et nous ferons de notre mieux — ajoutez simplement une note à la réservation.",
+        "en": ("We do have fish, soy and gluten in our kitchen. We have many "
+               "vegetarian options, though we're not able to do vegan. Only our "
+               "chicken is halal."),
+        "fr": ("Nous avons du poisson, du soja et du gluten dans notre cuisine. Nous "
+               "avons plusieurs options végétariennes, mais nous ne pouvons pas faire "
+               "de végétalien. Seul notre poulet est halal."),
     },
-    "reservations": {
-        "en": (
-            "I can book, change, or cancel a table for you right now. We seat "
-            "parties of up to 8 online — for anything larger I'll take a message "
-            "so our team can arrange it."
-        ),
-        "fr": (
-            "Je peux réserver, modifier ou annuler une table pour vous tout de "
-            "suite. Nous plaçons en ligne les groupes jusqu'à 8 personnes — pour "
-            "plus grand, je prendrai un message pour que notre équipe l'organise."
-        ),
-    },
-    "large_groups": {
-        "en": "For groups larger than 8, our team arranges the seating directly — I'll take your name and number and they'll call you back.",
-        "fr": "Pour les groupes de plus de 8 personnes, notre équipe organise le placement directement — je prends votre nom et numéro et on vous rappelle.",
+    "kids": {
+        "en": "We don't have a kids menu, and we have one high chair available.",
+        "fr": "Nous n'avons pas de menu pour enfants, et nous avons une chaise haute disponible.",
     },
     "payment": {
-        "en": "Most reservations don't require a deposit. If a particular booking needs a card to hold the table, you'll get a secure payment link by text.",
-        "fr": "La plupart des réservations ne nécessitent pas de dépôt. Si une réservation exige une carte pour garantir la table, vous recevrez un lien de paiement sécurisé par texto.",
+        "en": "We take cash, Visa, Mastercard and American Express.",
+        "fr": "Nous acceptons l'argent comptant, Visa, Mastercard et American Express.",
     },
+    "deposits": {
+        "en": "We don't take deposits or prepayment for reservations.",
+        "fr": "Nous ne prenons ni dépôt ni prépaiement pour les réservations.",
+    },
+    "service_fees": {
+        "en": "We don't charge any service fees.",
+        "fr": "Nous ne facturons aucuns frais de service.",
+    },
+    "takeout": {
+        "en": ("Take-out and delivery are available through our website. I can text "
+               "you the link if you'd like."),
+        "fr": ("Les commandes pour emporter et la livraison sont disponibles sur notre "
+               "site web. Je peux vous envoyer le lien par texto si vous voulez."),
+    },
+    "promo": {
+        "en": ("We have fifteen percent off take-out plus free delivery with the code "
+               "YEN15 — that's on our website only, on orders over fifty dollars."),
+        "fr": ("Nous offrons quinze pour cent de rabais sur les commandes à emporter et "
+               "la livraison gratuite avec le code YEN15 — sur notre site web seulement, "
+               "pour les commandes de plus de cinquante dollars."),
+    },
+    "happy_hour": {
+        "en": "We don't have a happy hour.",
+        "fr": "Nous n'avons pas de « happy hour ».",
+    },
+    "menu": {
+        "en": ("We serve Japanese cuisine. Our full menu is on our website — I can text "
+               "you the link."),
+        "fr": ("Nous servons une cuisine japonaise. Notre menu complet est sur notre site "
+               "web — je peux vous envoyer le lien par texto."),
+    },
+    "seasonal_menu": {
+        "en": "We don't have any seasonal menus running at the moment.",
+        "fr": "Nous n'avons pas de menu saisonnier en ce moment.",
+    },
+    "booking_policy": {
+        "en": ("We hold tables for an hour and a half for parties under six, and two "
+               "hours for parties of seven or more."),
+        "fr": ("Nous gardons les tables une heure et demie pour les groupes de moins de "
+               "six personnes, et deux heures pour les groupes de sept et plus."),
+    },
+    "large_groups": {
+        "en": ("For groups larger than seven, our team arranges the seating directly — "
+               "I'll take your name and number and they'll call you back."),
+        "fr": ("Pour les groupes de plus de sept personnes, notre équipe organise le "
+               "placement directement — je prends votre nom et votre numéro et on vous "
+               "rappelle."),
+    },
+    "outdoor_seating": {
+        "en": "We don't have outdoor seating or a terrace.",
+        "fr": "Nous n'avons pas de terrasse ni de places à l'extérieur.",
+    },
+    "pets": {
+        "en": "I'm sorry, we don't allow pets.",
+        "fr": "Je suis désolé, les animaux ne sont pas admis.",
+    },
+    "age_restrictions": {
+        "en": "There are no age restrictions — everyone's welcome.",
+        "fr": "Il n'y a aucune restriction d'âge — tout le monde est bienvenu.",
+    },
+    "byo": {
+        "en": "We don't offer bring-your-own.",
+        "fr": "Nous n'offrons pas l'option « apportez votre vin ».",
+    },
+    "entertainment": {
+        "en": "We don't have live entertainment or events.",
+        "fr": "Nous n'avons pas de spectacles ni d'événements.",
+    },
+    "reservations": {
+        "en": ("I can book, change or cancel a table for you right now. For groups over "
+               "seven I'll take a message so our team can arrange it."),
+        "fr": ("Je peux réserver, modifier ou annuler une table pour vous tout de suite. "
+               "Pour les groupes de plus de sept, je prendrai un message pour notre équipe."),
+    },
+    # NOTE: intentionally absent — the venue has never defined it. The agent must
+    # take a message rather than invent a policy:
+    #   "cancellation_policy"
 }
 
 TOPICS = sorted(FAQ.keys())

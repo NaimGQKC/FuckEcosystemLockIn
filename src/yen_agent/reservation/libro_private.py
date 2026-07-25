@@ -53,12 +53,22 @@ from .models import Availability, Booking, PaymentIntent, Person, TimeSlot
 ACCEPT_V1 = "application/vnd.libro-private-v1+json"   # default (JSON:API endpoints)
 ACCEPT_V2 = "application/vnd.libro-private-v2+json"   # /availabilities only
 WRITE_CONTENT_TYPE = "application/vnd.api+json"
-#: The services/availability data caps party size at 6 (max-slots); larger = staff.
+#: Availability exposes party sizes 1-6 only and services report max-slots: 6, so
+#: 7+ is escalated to staff. (The venue's own KB mentions a 7+ table-hold policy,
+#: so 7 may be bookable by some other path — erring toward staff is the safe side.)
 MAX_ONLINE_PARTY = 6
-#: Table turn length. The dashboard conveys the reservation via `expected-leave-at`
-#: (start + turn); the server derives the start time from it. 90 min matches the
-#: observed avg-seated-time and a live booking (start 19:45Z, leave 21:15Z).
+#: Table turn length, from the venue's stated booking policy: 1h30 for parties
+#: under 6, 2h for 7+. The create conveys this via `expected-leave-at` (start +
+#: turn) and the server derives the start time from it; 90 min matches a captured
+#: live booking exactly (start 19:45Z, leave 21:15Z).
 DEFAULT_TURN_MIN = 90
+LARGE_PARTY_TURN_MIN = 120
+LARGE_PARTY_THRESHOLD = 6
+
+
+def turn_minutes(party_size: int) -> int:
+    """Table hold time for a party (venue policy: 1h30 under 6, 2h for 7+)."""
+    return LARGE_PARTY_TURN_MIN if party_size > LARGE_PARTY_THRESHOLD else DEFAULT_TURN_MIN
 
 #: Attributes the dashboard sends on a booking PATCH (everything else — `time`,
 #: `size`, `source`, lifecycle timestamps — is server-derived/read-only).
@@ -275,7 +285,8 @@ class LibroPrivateReservationService(ReservationService):
             )
         start = _parse_dt(time)
         leave_iso = (
-            (start + dt.timedelta(minutes=DEFAULT_TURN_MIN)).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+            (start + dt.timedelta(minutes=turn_minutes(party_size)))
+            .strftime("%Y-%m-%dT%H:%M:%S.000Z")
             if start else time
         )
         # Mirror the dashboard's captured create payload field-for-field. `time`
@@ -393,6 +404,7 @@ class LibroPrivateReservationService(ReservationService):
         start = _parse_dt(new_time)
         attrs = {}
         if start:
+            # Party size is unchanged on a reschedule; use the stored size if known.
             attrs["expected-leave-at"] = (
                 start + dt.timedelta(minutes=DEFAULT_TURN_MIN)
             ).strftime("%Y-%m-%dT%H:%M:%S.000Z")
