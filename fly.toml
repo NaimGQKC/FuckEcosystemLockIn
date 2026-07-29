@@ -44,6 +44,21 @@ primary_region = "yyz"
   policy = "always"
 
 [[vm]]
-  # The turn detector holds an ONNX model in memory; 512MB is not enough.
+  # Memory is the single biggest line on the Fly bill — far bigger than CPU.
+  # Checked against fly.io/calculator (1 machine, shared, 1 core, ord):
+  #
+  #     CPU (1 shared core)  $0.87 / month   flat
+  #     RAM                  $6.24 / month per GB
+  #
+  #     256mb  ->  $2.43     512mb  ->  $3.99     1gb  ->  $7.11
+  #
+  # So 1gb is ~$4.70/month more than 512mb. We pay it because the worker is
+  # Python + onnxruntime (bundled Silero VAD) and an OOM kill is a dead phone
+  # line, not a slow one. Turn detection itself is hosted on LiveKit Cloud, so
+  # no ONNX turn-detector weights are held locally.
+  #
+  # We have never measured real RSS. After a week live, read the memory graph
+  # in the Fly dashboard: if it sits under ~300MB, drop to 512mb and save the
+  # $4.70. Do not drop it before there is a graph to look at.
   size = "shared-cpu-1x"
   memory = "1gb"

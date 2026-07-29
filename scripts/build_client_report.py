@@ -89,15 +89,15 @@ A(P("Summary", "h"))
 A(P("The assistant answers the phone in French, understands English, and books "
     "real tables directly in your Libro account. It has been tested end to end "
     "and books correctly.", "p"))
-A(P("Running it costs roughly <b>$14 CAD per month</b>, against the "
+A(P("Running it costs roughly <b>$20 CAD per month</b>, against the "
     "<b>$275 CAD per month</b> currently being paid to the existing provider "
-    "&mdash; a saving of about <b>$3,100 CAD per year</b>.", "p"))
+    "&mdash; a saving of about <b>$3,000 CAD per year</b>.", "p"))
 
 A(Spacer(1, 8))
 A(table([
     [P("", "cellb"), P("Today", "cellb"), P("Proposed", "cellb")],
     [P("Monthly running cost", "cell"), P("~$275 CAD", "cell"),
-     P("<b>~$14 CAD</b>", "cell")],
+     P("<b>~$20 CAD</b>", "cell")],
     [P("Calls that reach a booking", "cell"), P("15%", "cell"),
      P("to be measured", "cell")],
     [P("Calls handed to a human", "cell"), P("43%", "cell"),
@@ -172,7 +172,7 @@ A(table([
     [P("Service", "cellb"), P("What it does", "cellb"), P("Monthly", "cellb")],
     [P("Server hosting", "cell"),
      P("Runs the assistant, always on, in Toronto (Fly.io)", "cellsm"),
-     P("$4.40", "cell")],
+     P("$9.80", "cell")],
     [P("Phone number", "cell"),
      P("Montreal 514 number ($1.15/mo) plus inbound minutes (Twilio)", "cellsm"),
      P("$2.90", "cell")],
@@ -191,12 +191,12 @@ A(table([
     [P("Call handling", "cell"),
      P("Connects the phone line; free at this volume (LiveKit)", "cellsm"),
      P("$0.00", "cell")],
-    [P("Subtotal", "cell"), P("", "cell"), P("$11.80", "cell")],
+    [P("Subtotal", "cell"), P("", "cell"), P("$17.20", "cell")],
     [P("Contingency (15%)", "cell"),
      P("Rate changes, busier months, anything unforeseen", "cellsm"),
-     P("$1.80", "cell")],
+     P("$2.60", "cell")],
     [P("<b>Recurring total</b>", "cellb"), P("", "cell"),
-     P("<b>~$14 / month</b>", "cellb")],
+     P("<b>~$20 / month</b>", "cellb")],
 ], [1.9 * inch, 3.25 * inch, 1.2 * inch], align_right=(2,), band_last=True))
 
 A(Spacer(1, 4))
@@ -208,9 +208,9 @@ A(P("Comparison", "h"))
 A(table([
     [P("", "cellb"), P("Per month", "cellb"), P("Per year", "cellb")],
     [P("Current provider", "cell"), P("~$275", "cell"), P("~$3,300", "cell")],
-    [P("Proposed", "cell"), P("~$14", "cell"), P("~$170", "cell")],
-    [P("<b>Saving</b>", "cellb"), P("<b>~$261</b>", "cellb"),
-     P("<b>~$3,130</b>", "cellb")],
+    [P("Proposed", "cell"), P("~$20", "cell"), P("~$240", "cell")],
+    [P("<b>Saving</b>", "cellb"), P("<b>~$255</b>", "cellb"),
+     P("<b>~$3,060</b>", "cellb")],
 ], [2.4 * inch, 1.85 * inch, 1.85 * inch], align_right=(1, 2), band_last=True))
 
 A(Spacer(1, 6))
