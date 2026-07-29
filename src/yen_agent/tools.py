@@ -197,12 +197,8 @@ class ReservationAgent(Agent):
                              order: str = "", wants_callback: bool = True) -> str:
         """Handle a caller who wants takeout, delivery, or to order food.
 
-        Use this the moment a caller mentions ordering food to pick up or have
-        delivered — do NOT try to book them a table, and do NOT just tell them to
-        use the website and leave it there.
-
-        Offer them the choice first: "You can order on our website, or I can have
-        someone call you right back to take it by phone — which would you prefer?"
+        Offer the website-or-callback choice first (see the takeout rule in your
+        instructions), then call this. Never book them a table instead.
 
         Args:
             name: Caller's name, if given.

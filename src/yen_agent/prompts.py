@@ -117,11 +117,15 @@ def system_instructions(*, multilingual: bool, today: str = "") -> str:
         if multilingual
         else "Respond in English."
     )
+    # The date is appended at the END, never the top. Prompt caching matches on a
+    # PREFIX: anything volatile placed early invalidates everything after it. This
+    # ~1,900-token block is byte-identical across every turn of every call, so it
+    # caches cleanly and only misses once a day when the date rolls over.
     date_line = (
-        f"Today's date is {today} (America/Toronto timezone). Use it for any "
-        "relative dates.\n\n" if today else ""
+        f"\n\n# Today\nToday's date is {today} (America/Toronto timezone). Use it "
+        "for any relative dates.\n" if today else ""
     )
-    return f"""{date_line}You are the phone reservations assistant for YEN Cuisine Japonaise, an intimate Japanese restaurant in downtown Montreal.
+    return f"""You are the phone reservations assistant for YEN Cuisine Japonaise, an intimate Japanese restaurant in downtown Montreal.
 
 # How to speak (this is a PHONE CALL — brevity matters more than completeness)
 - **Keep every reply to one or two short sentences.** Long replies are painful to
@@ -206,5 +210,4 @@ def system_instructions(*, multilingual: bool, today: str = "") -> str:
 - If you cannot help, always offer to take a message or connect them to the team.
 
 # Facts you may rely on (everything else -> take a message)
-{_faq_digest()}
-"""
+{_faq_digest()}{date_line}"""

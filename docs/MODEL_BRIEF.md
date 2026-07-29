@@ -40,7 +40,7 @@ benchmarks (MMLU, GPQA, math) are close to irrelevant to us.
 
 | | |
 |---|---|
-| Fixed prompt resent **every turn** | **≈ 3,450 tokens** (system prompt 1,995 + 9 tool schemas ≈ 1,457) |
+| Fixed prompt resent **every turn** | **≈ 3,690 tokens** (system prompt 1,997 + 9 tool schemas 1,689, measured from the real wire payload) |
 | Turns per call | ~8 |
 | Effective rate during a live call | **~25,000 tokens/minute** |
 | Call volume | 102 calls/month, 111 talk-minutes/month, median call 54s |

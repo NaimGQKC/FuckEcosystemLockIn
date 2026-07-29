@@ -81,6 +81,64 @@ def _build_stt(settings: Settings):
     return deepgram.STT(model="nova-3", language="en")
 
 
+#: Prompt-cache key. **Constant, not per-call — that is deliberate.**
+#:
+#: Our fixed prefix (system prompt + 9 tool schemas, ~3,450 tokens) is *identical
+#: for every caller*, so a shared key lets call #2 hit the cache warmed by call
+#: #1. A per-call key would throw that away and pay full prefill on every call's
+#: first turn. OpenAI only splits traffic off a shared key above ~15 req/min; we
+#: run about 3 calls a day, so we are nowhere near it.
+#:
+#: Bump the suffix whenever the system prompt or tool schemas change, so a stale
+#: prefix is never served.
+PROMPT_CACHE_KEY = "yen-agent-v1"
+
+
+@dataclass(frozen=True)
+class _OpenAICompatible:
+    """An OpenAI-chat-completions-compatible endpoint.
+
+    Every provider here needs **zero code** — a base URL, a key, and a model
+    name. That is the whole reason the shortlist isn't only US vendors: Qwen,
+    DeepSeek, Moonshot, Z.ai and Mistral all speak this dialect, so trying one is
+    a `.env` change, not an integration.
+    """
+
+    base_url: str
+    env_key: str
+    default_model: str
+    #: OpenAI-specific; other vendors reject the field.
+    supports_cache_key: bool = False
+
+
+OPENAI_COMPATIBLE: dict[str, _OpenAICompatible] = {
+    # -- US ------------------------------------------------------------------
+    "openai": _OpenAICompatible("", "OPENAI_API_KEY", "gpt-4o-mini",
+                                supports_cache_key=True),
+    "groq": _OpenAICompatible("https://api.groq.com/openai/v1", "GROQ_API_KEY",
+                              "llama-3.3-70b-versatile"),
+    "cerebras": _OpenAICompatible("https://api.cerebras.ai/v1", "CEREBRAS_API_KEY",
+                                  "llama-3.3-70b"),
+    "xai": _OpenAICompatible("https://api.x.ai/v1", "XAI_API_KEY",
+                             "grok-4-1-fast-non-reasoning"),
+    # -- non-US: cheap, strong, and genuinely multilingual --------------------
+    # Worth testing rather than assuming. These train on far more non-English
+    # text than the US labs, which is the opposite of what our venue's
+    # two-thirds-French call mix would suggest ignoring.
+    "qwen": _OpenAICompatible(
+        "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+        "DASHSCOPE_API_KEY", "qwen-plus"),
+    "deepseek": _OpenAICompatible("https://api.deepseek.com/v1",
+                                  "DEEPSEEK_API_KEY", "deepseek-chat"),
+    "moonshot": _OpenAICompatible("https://api.moonshot.ai/v1",
+                                  "MOONSHOT_API_KEY", "kimi-k2-turbo-preview"),
+    "zhipu": _OpenAICompatible("https://api.z.ai/api/paas/v4",
+                               "ZHIPU_API_KEY", "glm-4.6"),
+    "mistral": _OpenAICompatible("https://api.mistral.ai/v1",
+                                 "MISTRAL_API_KEY", "mistral-small-latest"),
+}
+
+
 def _build_llm(settings: Settings):
     """Pick the runtime LLM.
 
@@ -118,26 +176,39 @@ def _build_llm(settings: Settings):
     provider = (settings.llm_provider or "groq").lower()
     model = settings.llm_model
 
-    if provider == "groq":
-        # Groq exposes an OpenAI-compatible endpoint.
-        return openai.LLM(
-            model=model or "llama-3.3-70b-versatile",
-            base_url="https://api.groq.com/openai/v1",
-            api_key=os.environ.get("GROQ_API_KEY"),
-        )
-    if provider == "cerebras":
-        return openai.LLM.with_cerebras(model=model or "llama-3.3-70b")
-    if provider in ("xai", "grok"):
-        # xAI retired several models in 2026 — run `python scripts/check_setup.py`
-        # to list what your account can actually use, then set YEN_LLM_MODEL.
-        return openai.LLM.with_x_ai(model=model or "grok-4-1-fast-non-reasoning")
+    if provider in ("anthropic", "claude"):
+        from livekit.plugins import anthropic
+
+        # caching=True marks the system prompt + tool schemas as a cache breakpoint.
+        return anthropic.LLM(model=model or "claude-haiku-4-5-20251001", caching=True)
+
+    if provider in ("google", "gemini"):
+        return google.LLM(model=model or "gemini-2.5-flash")
+
     if provider == "livekit":
         from livekit.agents import inference
 
-        return inference.LLM(model=model or "google/gemini-2.5-flash-lite")
-    if provider == "openai":
-        return openai.LLM(model=model or "gpt-4o-mini")
-    return google.LLM(model=model or "gemini-2.5-flash-lite")
+        return inference.LLM(model=model or "google/gemini-2.5-flash")
+
+    spec = OPENAI_COMPATIBLE.get(provider)
+    if spec is None:
+        raise ValueError(
+            f"Unknown YEN_LLM_PROVIDER={provider!r}. Known: "
+            + ", ".join(sorted([*OPENAI_COMPATIBLE, "anthropic", "google", "livekit"]))
+        )
+
+    key = os.environ.get(spec.env_key)
+    if not key and spec.env_key != "OPENAI_API_KEY":
+        logger.warning("%s is not set; %s will fail to authenticate",
+                       spec.env_key, provider)
+
+    kwargs = dict(model=model or spec.default_model, api_key=key)
+    if spec.base_url:
+        kwargs["base_url"] = spec.base_url
+    if spec.supports_cache_key:
+        # See PROMPT_CACHE_KEY: a constant key, deliberately.
+        kwargs["prompt_cache_key"] = PROMPT_CACHE_KEY
+    return openai.LLM(**kwargs)
 
 
 #: Deepgram Aura-2 voice used for the English-only build.
