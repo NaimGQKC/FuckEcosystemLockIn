@@ -57,7 +57,8 @@ def check_env_file() -> None:
     print("\n1) .env file")
     env_path = ROOT / ".env"
     if not env_path.exists():
-        fail(".env not found", "Run: cp .env.example .env  — then fill in the 5 required values.")
+        fail(".env not found",
+             "Run: cp .env.example .env  — then fill in the 2 TIER 1 keys.")
         return
     ok(".env exists")
 
@@ -73,11 +74,12 @@ def check_env_file() -> None:
                 k, _, v = line.partition("=")
                 os.environ.setdefault(k.strip(), v.strip())
 
+    # TIER 1 — everything you need to TALK to the agent in console mode.
+    # LiveKit is NOT here on purpose: `console` runs entirely on your laptop and
+    # falls back to VAD turn-taking without it. Demanding it would block the
+    # 10-minute path on a third account nobody needs yet.
     required = {
-        "LIVEKIT_URL": "LiveKit Cloud → Settings → API Keys",
-        "LIVEKIT_API_KEY": "LiveKit Cloud → Settings → API Keys",
-        "LIVEKIT_API_SECRET": "LiveKit Cloud → Settings → API Keys",
-        "DEEPGRAM_API_KEY": "https://console.deepgram.com → API Keys",
+        "DEEPGRAM_API_KEY": "https://console.deepgram.com/signup → API Keys",
     }
     llm_keys = {
         "groq": ("GROQ_API_KEY", "https://console.groq.com/keys"),
@@ -87,14 +89,11 @@ def check_env_file() -> None:
         "google": ("GOOGLE_API_KEY", "https://aistudio.google.com/apikey"),
         "livekit": (None, "(uses your LiveKit credentials)"),
     }
-    provider = os.environ.get("YEN_LLM_PROVIDER", "groq").lower()
-    key_name, where = llm_keys.get(provider, llm_keys["groq"])
+    provider = os.environ.get("YEN_LLM_PROVIDER", "google").lower()
+    key_name, where = llm_keys.get(provider, llm_keys["google"])
     print(f"  (LLM provider: {provider})")
     if key_name:
         required[key_name] = where
-    if provider == "google":
-        warn("Google's free Gemini tier allows only ~20 requests/DAY",
-             "One voice conversation exhausts it. Prefer YEN_LLM_PROVIDER=groq.")
 
     for key, where in required.items():
         if _placeholder(os.environ.get(key, "")):
@@ -102,9 +101,19 @@ def check_env_file() -> None:
         else:
             ok(f"{key} is set")
 
-    url = os.environ.get("LIVEKIT_URL", "")
-    if url and not _placeholder(url) and not url.startswith("wss://"):
-        warn("LIVEKIT_URL should start with wss://", f"Current value: {url}")
+    # TIER 3 — only needed for a browser or phone call, never for `console`.
+    lk = [k for k in ("LIVEKIT_URL", "LIVEKIT_API_KEY", "LIVEKIT_API_SECRET")
+          if not _placeholder(os.environ.get(k, ""))]
+    if len(lk) == 3:
+        ok("LiveKit credentials set (browser + phone calls available)")
+        url = os.environ.get("LIVEKIT_URL", "")
+        if not url.startswith("wss://"):
+            warn("LIVEKIT_URL should start with wss://", f"Current value: {url}")
+    elif lk:
+        warn(f"LiveKit partially configured ({len(lk)}/3)",
+             "All three are needed. See docs/SETUP.md Tier 4.")
+    else:
+        print("  \033[2m  (LiveKit not set — fine; `console` mode doesn't need it)\033[0m")
 
 
 # ------------------------------------------------------------ 2. installs ---
