@@ -39,7 +39,12 @@ class Settings:
     libro_private_restaurant_id: str = "8169"  # YEN Cuisine Japonaise
 
     # Voice stack
-    llm_provider: str = "groq"  # groq | cerebras | xai | openai | livekit | google
+    #: Default: gemini-2.5-flash. Of every candidate assessed against primary
+    #: sources, Google's Flash family is the ONLY one with both a measured TTFT
+    #: inside the 200-700ms budget and a prompt cache whose 2,048-token minimum
+    #: our ~3,690-token prefix actually clears. See docs/MODEL_SHORTLIST.md.
+    #: Swap with YEN_LLM_PROVIDER; every alternative is a .env change.
+    llm_provider: str = "google"
     llm_model: str = ""  # optional override, e.g. "gpt-4o-mini"
     language_mode: str = "en"  # en | multi
 
@@ -78,7 +83,7 @@ class Settings:
             libro_private_token=_env("LIBRO_PRIVATE_TOKEN"),
             libro_private_email=_env("LIBRO_PRIVATE_EMAIL"),
             libro_private_restaurant_id=_env("LIBRO_PRIVATE_RESTAURANT_ID", "8169"),
-            llm_provider=_env("YEN_LLM_PROVIDER", "groq"),
+            llm_provider=_env("YEN_LLM_PROVIDER", "google"),
             llm_model=_env("YEN_LLM_MODEL", ""),
             language_mode=_env("YEN_LANGUAGE_MODE", "en"),
             tts_model=_env("YEN_TTS_MODEL", ""),

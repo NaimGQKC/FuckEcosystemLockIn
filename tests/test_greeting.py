@@ -196,6 +196,7 @@ async def test_session_accepts_the_aec_override_without_deprecation(monkeypatch)
 
     for key, val in (
         ("DEEPGRAM_API_KEY", "fake"), ("GROQ_API_KEY", "fake"),
+        ("GOOGLE_API_KEY", "fake"),  # default provider
         ("LIVEKIT_API_KEY", "fake"), ("LIVEKIT_API_SECRET", "fake"),
         ("LIVEKIT_URL", "wss://fake.livekit.cloud"),
     ):
@@ -333,6 +334,7 @@ def test_multilingual_tts_is_not_the_english_only_voice(monkeypatch):
     monkeypatch.setenv("LIVEKIT_API_SECRET", "fake")
     monkeypatch.setenv("LIVEKIT_URL", "wss://fake.livekit.cloud")
     monkeypatch.setenv("DEEPGRAM_API_KEY", "fake")
+    monkeypatch.setenv("GOOGLE_API_KEY", "fake")
 
     tts = agent_mod._build_tts(Settings(language_mode="multi"))
     assert "deepgram" not in type(tts).__module__
@@ -341,6 +343,7 @@ def test_multilingual_tts_is_not_the_english_only_voice(monkeypatch):
 def test_english_mode_keeps_the_single_vendor_deepgram_voice(monkeypatch):
     agent_mod = pytest.importorskip("yen_agent.agent")
     monkeypatch.setenv("DEEPGRAM_API_KEY", "fake")
+    monkeypatch.setenv("GOOGLE_API_KEY", "fake")
     tts = agent_mod._build_tts(Settings())
     assert "deepgram" in type(tts).__module__
 
@@ -348,6 +351,7 @@ def test_english_mode_keeps_the_single_vendor_deepgram_voice(monkeypatch):
 def test_tts_model_env_override_wins(monkeypatch):
     agent_mod = pytest.importorskip("yen_agent.agent")
     monkeypatch.setenv("DEEPGRAM_API_KEY", "fake")
+    monkeypatch.setenv("GOOGLE_API_KEY", "fake")
     tts = agent_mod._build_tts(Settings(language_mode="multi", tts_model="aura-2-thalia-en"))
     assert "deepgram" in type(tts).__module__
 
@@ -358,6 +362,7 @@ def test_multilingual_without_livekit_credentials_warns_loudly(monkeypatch, capl
     monkeypatch.delenv("LIVEKIT_API_KEY", raising=False)
     monkeypatch.delenv("LIVEKIT_URL", raising=False)
     monkeypatch.setenv("DEEPGRAM_API_KEY", "fake")
+    monkeypatch.setenv("GOOGLE_API_KEY", "fake")
 
     with caplog.at_level("WARNING", logger="yen-agent"):
         agent_mod._build_tts(Settings(language_mode="multi"))

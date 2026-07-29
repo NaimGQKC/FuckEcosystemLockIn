@@ -180,7 +180,7 @@ def _build_llm(settings: Settings):
       google   free tier is ~20 requests per DAY — one conversation exhausts it
                and every later turn dies with 429. Development only.
     """
-    provider = (settings.llm_provider or "groq").lower()
+    provider = (settings.llm_provider or "google").lower()
     model = settings.llm_model
 
     if provider in ("anthropic", "claude"):

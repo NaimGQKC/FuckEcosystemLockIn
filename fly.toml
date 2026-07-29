@@ -1,0 +1,49 @@
+# Fly.io deployment for the YEN voice agent worker.
+#
+# Region is yyz (Toronto) — the only Canadian region among the hosts we
+# evaluated. Render and Railway have none. It is the shortest hop to a Montreal
+# phone line and to Supabase ca-central-1, and it keeps guest data in Canada,
+# which matters under Quebec's Law 25.
+#
+#   fly launch --no-deploy      # once, to create the app
+#   fly secrets set KEY=value   # see docs/DEPLOY.md for the full list
+#   fly deploy
+
+app = "yen-voice-agent"
+primary_region = "yyz"
+
+[build]
+
+[env]
+  YEN_RESERVATION_BACKEND = "libro-private"
+  YEN_LANGUAGE_MODE = "multi"
+  YEN_LLM_PROVIDER = "google"
+
+[http_service]
+  # livekit-agents serves a health endpoint on 8081. Exposing it is what lets
+  # Fly notice a worker that is alive but wedged.
+  internal_port = 8081
+  force_https = true
+  auto_stop_machines = false   # NEVER stop. A stopped worker is a dead phone line.
+  auto_start_machines = true
+  min_machines_running = 1     # this is the "always warm" guarantee we are paying for
+
+  [[http_service.checks]]
+    interval = "30s"
+    timeout = "5s"
+    grace_period = "20s"
+    method = "GET"
+    path = "/"
+
+[[restart]]
+  # ⚠️ DO NOT CHANGE TO "on-failure".
+  #
+  # Fly's default restart policy is on-failure WITH A RETRY BUDGET. A crash loop
+  # exhausts the budget and Fly then stops restarting — leaving the restaurant's
+  # phone permanently dead, silently, with no alert. "always" has no budget.
+  policy = "always"
+
+[[vm]]
+  # The turn detector holds an ONNX model in memory; 512MB is not enough.
+  size = "shared-cpu-1x"
+  memory = "1gb"
