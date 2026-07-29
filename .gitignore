@@ -36,3 +36,4 @@ libro_booking_truth.json
 .idea/
 .vscode/
 .DS_Store
+LIVE_BOOKINGS_TO_DELETE.txt

@@ -199,6 +199,45 @@ def _get(d: dict, *keys, default=None):
     return default
 
 
+#: Every real booking is written to this file as one line, immediately, in
+#: addition to the console banner. A banner scrolls off; a file does not, and if
+#: the process dies before anyone reads the terminal the record still exists.
+LIVE_BOOKINGS_LOG = "LIVE_BOOKINGS_TO_DELETE.txt"
+
+DASHBOARD_URL = "https://dashboard.libroreserve.com/restaurants/{rid}/reservations"
+
+
+def _announce_live_booking(booking, restaurant_id: str) -> None:
+    """Shout about a booking that now exists on the restaurant's real floor.
+
+    This is a REAL table at a REAL restaurant. A test booking left behind is a
+    table their staff cannot sell and a guest who never arrives, so it has to be
+    impossible to create one without noticing. Never raises — announcing must not
+    be able to fail a booking that already succeeded.
+    """
+    try:
+        url = DASHBOARD_URL.format(rid=restaurant_id)
+        banner = (
+            "\n" + "!" * 78 +
+            "\n!!  A REAL BOOKING NOW EXISTS ON YEN'S FLOOR — DELETE IT WHEN DONE" +
+            f"\n!!  booking id : {booking.id}" +
+            f"\n!!  time       : {booking.time}" +
+            f"\n!!  party      : {booking.size}" +
+            f"\n!!  cancel     : python scripts/verify_booking.py --id {booking.id}" +
+            f"\n!!  check      : {url}" +
+            "\n" + "!" * 78 + "\n"
+        )
+        print(banner, flush=True)
+        logger.warning("LIVE BOOKING CREATED id=%s time=%s size=%s — delete when done",
+                       booking.id, booking.time, booking.size)
+        with open(LIVE_BOOKINGS_LOG, "a", encoding="utf-8") as fh:
+            fh.write(f"{dt.datetime.now(dt.timezone.utc).isoformat(timespec='seconds')}"
+                     f"\tid={booking.id}\ttime={booking.time}\tsize={booking.size}"
+                     f"\tDELETE_AT={url}\n")
+    except Exception:
+        logger.exception("could not announce live booking (the booking DID succeed)")
+
+
 class LibroPrivateReservationService(ReservationService):
     def __init__(
         self,
@@ -521,7 +560,9 @@ class LibroPrivateReservationService(ReservationService):
             },
         }}
         body = await self._request("POST", "/bookings", json=payload)
-        return self._parse_booking(body)
+        booking = self._parse_booking(body)
+        _announce_live_booking(booking, self._restaurant_id)
+        return booking
 
     async def get_booking(self, booking_id: str) -> Booking:
         return self._parse_booking(await self._request("GET", f"/bookings/{booking_id}"))
