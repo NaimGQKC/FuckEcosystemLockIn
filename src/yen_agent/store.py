@@ -92,6 +92,16 @@ CREATE TABLE IF NOT EXISTS booking_attempts (
     error       TEXT    NOT NULL DEFAULT ''
 );
 
+CREATE TABLE IF NOT EXISTS tool_calls (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    call_id    TEXT    NOT NULL,
+    created_at TEXT    NOT NULL,
+    seq        INTEGER NOT NULL,          -- order within the call
+    tool       TEXT    NOT NULL,
+    ok         INTEGER NOT NULL DEFAULT 1
+);
+
+CREATE INDEX IF NOT EXISTS idx_tool_calls_call ON tool_calls (call_id, seq);
 CREATE INDEX IF NOT EXISTS idx_messages_undelivered
     ON messages (delivered_at) WHERE delivered_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_attempts_failed
@@ -124,10 +134,63 @@ CALLS_TELEMETRY_COLUMNS: tuple[tuple[str, str], ...] = (
     # 1 = the AI disclosure clause played to completion; 0 = it was talked over
     # and the model was told to disclose in its first reply instead
     ("disclosure_spoken", "INTEGER NOT NULL DEFAULT 0"),
+    # Deterministic classification of the finished call (see CATEGORY_RULES).
+    ("category", "TEXT NOT NULL DEFAULT ''"),
+    # The tools that fired, in order — the evidence behind `category`.
+    ("tool_sequence", "TEXT NOT NULL DEFAULT ''"),
 )
 
 #: Names only, in declaration order — the write path's allow-list.
 TELEMETRY_FIELDS: tuple[str, ...] = tuple(name for name, _ in CALLS_TELEMETRY_COLUMNS)
+
+
+#: How a finished call is classified, mirroring the categories the venue's
+#: previous system reported so the two are comparable.
+#:
+#: Derived **deterministically from the tool trace**, never by asking a model to
+#: summarise. The incumbent's own summaries were sometimes wrong — one claimed a
+#: modification the tool trace shows never happened — and a dashboard that
+#: quietly invents outcomes is worse than one that shows fewer of them.
+#:
+#: Order matters: the first matching rule wins, most-completed first.
+CATEGORY_RULES: tuple[tuple[str, str], ...] = (
+    ("BOOKED", "a reservation was created"),
+    ("MODIFIED", "an existing reservation was moved"),
+    ("CANCELLED", "a reservation was cancelled"),
+    ("TAKEOUT", "a takeout order was captured for callback"),
+    ("WAITLIST", "caller captured because nothing was available"),
+    ("MESSAGE", "a message was taken for the team"),
+    ("NO_AVAILABILITY", "availability was checked, nothing booked"),
+    ("QA", "a question was answered, nothing booked"),
+    ("NO_INTERACTION", "the caller never spoke"),
+    ("INCOMPLETE", "the caller spoke but nothing was completed"),
+)
+
+CATEGORY_REASONS: dict[str, str] = dict(CATEGORY_RULES)
+
+
+def categorize(*, tools: list[str], booked: bool, user_spoke: bool) -> str:
+    """Classify a call from what actually happened. Pure; unit-tested."""
+    ts = set(tools)
+    if booked:
+        return "BOOKED"
+    if "reschedule_reservation" in ts:
+        return "MODIFIED"
+    if "cancel_reservation" in ts:
+        return "CANCELLED"
+    if "handle_takeout" in ts:
+        return "TAKEOUT"
+    if "join_waitlist" in ts:
+        return "WAITLIST"
+    if "take_message" in ts:
+        return "MESSAGE"
+    if not user_spoke:
+        return "NO_INTERACTION"
+    if "check_availability" in ts:
+        return "NO_AVAILABILITY"
+    if "answer_faq" in ts or "lookup_reservation" in ts:
+        return "QA"
+    return "INCOMPLETE"
 
 
 def _now() -> str:
@@ -197,11 +260,28 @@ class CallStore:
 
     def end_call(self, call_id: str, *, outcome: str = "completed",
                  transcript: str = "") -> None:
+        """Close the call, and classify it from what actually happened.
+
+        The category is computed here rather than written by the caller so that
+        it always reflects the recorded trace — there is no path where the label
+        and the evidence can disagree.
+        """
+        tools = self.tool_trace(call_id)
+        booked = bool(self._conn.execute(
+            "SELECT 1 FROM booking_attempts WHERE call_id = ? AND ok = 1 LIMIT 1",
+            (call_id,)
+        ).fetchone())
+        spoke_row = self._conn.execute(
+            "SELECT user_spoke FROM calls WHERE call_id = ?", (call_id,)
+        ).fetchone()
+        user_spoke = bool(spoke_row["user_spoke"]) if spoke_row else False
+        category = categorize(tools=tools, booked=booked, user_spoke=user_spoke)
+
         with self._lock:
             self._conn.execute(
-                "UPDATE calls SET ended_at = ?, outcome = ?, transcript = ? "
-                "WHERE call_id = ?",
-                (_now(), outcome, transcript, call_id),
+                "UPDATE calls SET ended_at = ?, outcome = ?, transcript = ?, "
+                "category = ?, tool_sequence = ? WHERE call_id = ?",
+                (_now(), outcome, transcript, category, " -> ".join(tools), call_id),
             )
             self._conn.commit()
 
@@ -314,6 +394,48 @@ class CallStore:
             )
             self._conn.commit()
             return int(cur.lastrowid or 0)
+
+    def record_tool_call(self, *, call_id: str, tool: str, ok: bool = True) -> None:
+        """Append to the call's tool trace. Never raises — telemetry must not
+        break a live call."""
+        try:
+            with self._lock:
+                row = self._conn.execute(
+                    "SELECT COALESCE(MAX(seq), 0) + 1 AS n FROM tool_calls "
+                    "WHERE call_id = ?", (call_id,)
+                ).fetchone()
+                self._conn.execute(
+                    "INSERT INTO tool_calls (call_id, created_at, seq, tool, ok) "
+                    "VALUES (?, ?, ?, ?, ?)",
+                    (call_id, _now(), int(row["n"]), tool, 1 if ok else 0),
+                )
+                self._conn.commit()
+        except Exception:
+            logger.exception("could not record tool call %s for %s", tool, call_id)
+
+    def tool_trace(self, call_id: str) -> list[str]:
+        rows = self._conn.execute(
+            "SELECT tool FROM tool_calls WHERE call_id = ? ORDER BY seq", (call_id,)
+        ).fetchall()
+        return [r["tool"] for r in rows]
+
+    def category_breakdown(self, *, since_days: int = 7) -> list[tuple[str, int, float]]:
+        """(category, count, share) for finished calls, most common first."""
+        cutoff = (dt.datetime.now(dt.timezone.utc)
+                  - dt.timedelta(days=since_days)).isoformat(timespec="seconds")
+        rows = self._conn.execute(
+            "SELECT category, COUNT(*) c FROM calls "
+            "WHERE started_at >= ? AND category != '' GROUP BY category "
+            "ORDER BY c DESC", (cutoff,)
+        ).fetchall()
+        total = sum(r["c"] for r in rows) or 1
+        return [(r["category"], r["c"], r["c"] / total) for r in rows]
+
+    def call_detail(self, call_id: str):
+        row = self._conn.execute(
+            "SELECT * FROM calls WHERE call_id = ?", (call_id,)
+        ).fetchone()
+        return row
 
     def mark_delivered(self, message_id: int, *, error: str = "") -> None:
         """Record whether the restaurant was actually notified."""

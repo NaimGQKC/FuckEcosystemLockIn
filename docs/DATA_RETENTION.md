@@ -18,9 +18,18 @@ with the restaurant before going live.
 | `booking_attempts` | name, phone, party size, requested time, success/failure | **Yes** |
 
 **Not stored:** payment details (we never collect any), audio recordings, or
-email content. The `transcript` column exists but the agent does not populate it
-today — turning that on is a deliberate decision, not a default, because a
-transcript is far more sensitive than a name and a number.
+email content.
+
+**Transcripts are OPT-IN.** Set `YEN_STORE_TRANSCRIPTS=1` to record them. They
+are off by default and deliberately so: a transcript can contain anything a
+caller chose to say, which is a different category of sensitivity from a name
+and a phone number. When enabled they are covered by the same 90-day purge as
+everything else, and the dashboard escapes them on render.
+
+Also stored per call: the **tool trace** (which tools ran, in order) and a
+derived **category**. Neither contains guest data — they are the evidence behind
+the dashboard's outcome breakdown, and they exist so a call's label can never
+disagree with what actually happened.
 
 ## Why we keep it
 

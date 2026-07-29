@@ -23,15 +23,30 @@ _FALLBACK = (
 
 
 def _safe(fn):
-    """Never let a tool exception kill the call — speak a graceful line instead."""
+    """Never let a tool exception kill the call — speak a graceful line instead.
+
+    Also the single choke point every tool passes through, so the call's tool
+    trace is recorded here rather than in nine places that could drift apart.
+    That trace is what `store.categorize` classifies the call from, which is why
+    it must be complete: a missing entry becomes a mis-labelled call.
+    """
 
     @functools.wraps(fn)
-    async def wrapper(*args, **kwargs):
+    async def wrapper(self, *args, **kwargs):
+        name = getattr(fn, "__name__", "?")
+        ok = True
         try:
-            return await fn(*args, **kwargs)
+            return await fn(self, *args, **kwargs)
         except Exception:  # noqa: BLE001 - a live call must not crash
-            logger.exception("tool %s failed", getattr(fn, "__name__", "?"))
+            ok = False
+            logger.exception("tool %s failed", name)
             return _FALLBACK
+        finally:
+            store = getattr(getattr(self, "concierge", None), "store", None)
+            if store is not None:
+                store.record_tool_call(
+                    call_id=self.concierge.call_id, tool=name, ok=ok
+                )
 
     return wrapper
 

@@ -27,6 +27,8 @@ import hmac
 import os
 from datetime import datetime, timezone
 
+import html
+
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse
 
@@ -98,6 +100,17 @@ background:var(--line);color:var(--fg)}
 .note{color:var(--dim);font-size:12px;margin-top:6px}
 footer{margin-top:44px;color:var(--dim);font-size:12px;border-top:1px solid var(--line);padding-top:14px}
 a{color:var(--accent)}
+.bar{display:flex;align-items:center;gap:10px;margin:7px 0}
+.bar .lab{width:150px;font-size:13px;flex:none}
+.bar .track{flex:1;height:9px;background:var(--line);border-radius:99px;overflow:hidden}
+.bar .fill{height:100%;background:var(--accent);border-radius:99px}
+.bar .val{width:78px;text-align:right;font-size:13px;color:var(--dim);flex:none}
+.why{color:var(--dim);font-size:12px;margin:2px 0 0 160px}
+pre.tx{background:var(--card);border:1px solid var(--line);border-radius:8px;
+padding:14px;white-space:pre-wrap;word-break:break-word;font-size:13px;line-height:1.6;
+max-height:60vh;overflow:auto}
+.seq{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;color:var(--dim)}
+.back{display:inline-block;margin-bottom:14px}
 """
 
 
@@ -151,6 +164,20 @@ def build_app(store: CallStore | None = None) -> FastAPI:
                   "warn" if (zero_rate or 0) > 0.10 else ""),
         ])
 
+        # --- what calls actually turned into ---------------------------------
+        breakdown = st.category_breakdown(since_days=days)
+        if breakdown:
+            from .store import CATEGORY_REASONS
+            bars = "".join(
+                f"<div class='bar'><div class='lab'>{cat}</div>"
+                f"<div class='track'><div class='fill' style='width:{share*100:.0f}%'></div></div>"
+                f"<div class='val'>{n} · {share*100:.0f}%</div></div>"
+                f"<div class='why'>{CATEGORY_REASONS.get(cat, '')}</div>"
+                for cat, n, share in breakdown
+            )
+        else:
+            bars = "<p class='empty'>No finished calls yet.</p>"
+
         # --- things needing a human -----------------------------------------
         if pending:
             rows = "".join(
@@ -194,11 +221,13 @@ def build_app(store: CallStore | None = None) -> FastAPI:
                 f"<tr><td>{_ago(r['started_at'])}</td>"
                 f"<td>{outcome_pill(r['outcome'])}</td>"
                 f"<td>{(r['detected_language'] if 'detected_language' in r.keys() else '') or '—'}</td>"
-                f"<td>{r['call_id'][:12]}</td></tr>"
+                f"<td><span class='pill'>{(r['category'] if 'category' in r.keys() else '') or '—'}</span></td>"
+                f"<td><a href='/call/{r['call_id']}?token={token}'>"
+                f"{r['call_id'][:12]}</a></td></tr>"
                 for r in calls
             )
             calls_html = ("<div class='scroll'><table><tr><th>When</th><th>Outcome</th>"
-                          f"<th>Lang</th><th>Call</th></tr>{rows}</table></div>")
+                          f"<th>Lang</th><th>Category</th><th>Call</th></tr>{rows}</table></div>")
         else:
             calls_html = "<p class='empty'>No calls recorded yet.</p>"
 
@@ -212,11 +241,50 @@ def build_app(store: CallStore | None = None) -> FastAPI:
 <h1>YEN — voice agent</h1>
 <div class="sub">Last {days} days{masked_note}</div>
 <div class="grid">{cards}</div>
+<h2>What calls turned into</h2>{bars}
 <h2>Needs a person</h2>{todo}
 <h2>Bookings the agent could not make</h2>{fails}
 <h2>Recent calls</h2>{calls_html}
 <footer>Read-only. Libro remains the system of record for reservations —
 nothing here can change a booking.</footer>
 </div></body></html>"""
+
+    @app.get("/call/{call_id}", response_class=HTMLResponse)
+    async def call_detail(call_id: str, token: str = Query(""),
+                          full: int = Query(0)) -> str:
+        if not _authorized(token):
+            raise HTTPException(status_code=401, detail="Bad or missing token")
+        st = get_store()
+        row = st.call_detail(call_id)
+        if row is None:
+            raise HTTPException(status_code=404, detail="No such call")
+
+        keys = row.keys()
+        transcript = (row["transcript"] if "transcript" in keys else "") or ""
+        if transcript:
+            # html.escape: a caller can say anything, and it lands in this page.
+            body = f"<pre class='tx'>{html.escape(transcript)}</pre>"
+        else:
+            body = ("<p class='empty'>No transcript stored for this call. "
+                    "Transcripts are off by default — set "
+                    "<code>YEN_STORE_TRANSCRIPTS=1</code> to record them "
+                    "(they are far more sensitive than a name and number; see "
+                    "docs/DATA_RETENTION.md).</p>")
+
+        seq = (row["tool_sequence"] if "tool_sequence" in keys else "") or "none"
+        cat = (row["category"] if "category" in keys else "") or "—"
+        lang = (row["detected_language"] if "detected_language" in keys else "") or "—"
+        return f"""<!doctype html><html lang="en"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Call {html.escape(call_id[:12])}</title><style>{CSS}</style></head>
+<body><div class="wrap">
+<a class="back" href="/?token={token}">&larr; all calls</a>
+<h1>Call {html.escape(call_id[:12])}</h1>
+<div class="sub">{_ago(row['started_at'])} · {html.escape(cat)} ·
+language {html.escape(lang)} · outcome {html.escape(row['outcome'] or '—')}</div>
+<h2>Tools the agent used</h2>
+<p class="seq">{html.escape(seq)}</p>
+<h2>Transcript</h2>{body}
+<footer>Read-only.</footer></div></body></html>"""
 
     return app

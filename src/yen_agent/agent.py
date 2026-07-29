@@ -487,6 +487,31 @@ async def entrypoint(ctx: JobContext) -> None:
     async def _log_usage() -> None:
         logger.info("call usage summary: %s", usage.get_summary())
 
+    def _collect_transcript() -> str:
+        """Render the conversation for the dashboard's per-call view.
+
+        ⚠️ A transcript is materially more sensitive than a name and a number —
+        it can contain anything a caller said. It is therefore OPT-IN via
+        YEN_STORE_TRANSCRIPTS, and covered by the same retention purge as
+        everything else (docs/DATA_RETENTION.md).
+        """
+        if os.environ.get("YEN_STORE_TRANSCRIPTS", "").lower() not in ("1", "true", "yes"):
+            return ""
+        try:
+            lines = []
+            for item in session.history.items:
+                role = getattr(item, "role", "")
+                if role not in ("user", "assistant"):
+                    continue
+                text = getattr(item, "text_content", None) or ""
+                if text:
+                    who = "Caller" if role == "user" else "Agent"
+                    lines.append(f"{who}: {text}")
+            return "\n".join(lines)
+        except Exception:
+            logger.exception("could not collect transcript")
+            return ""
+
     async def _close_call_record() -> None:
         try:
             # Last write wins for anything measured after the greeting — most
@@ -494,7 +519,8 @@ async def entrypoint(ctx: JobContext) -> None:
             # this whole exercise exists to move.
             store.record_greeting(call_id, **tele.as_row())
             outcome = "completed" if tele.user_spoke else "no_user_turn"
-            store.end_call(call_id, outcome=outcome)
+            store.end_call(call_id, outcome=outcome,
+                           transcript=_collect_transcript())
         finally:
             store.close()
 
