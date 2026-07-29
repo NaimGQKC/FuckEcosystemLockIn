@@ -106,6 +106,28 @@ def disclosure_reminder(multilingual: bool) -> str:
     return DISCLOSURE_REMINDER_FR if multilingual else DISCLOSURE_REMINDER_EN
 
 
+#: ⚠️ DO NOT SHRINK THE FIXED PREFIX BELOW THIS.
+#:
+#: Anthropic's prompt cache has a **4,096-token minimum for Claude Haiku 4.5**
+#: (Sonnet 4.5/4.6 is 1,024; Haiku 3.5 is 2,048). Below the minimum a
+#: `cache_control` breakpoint is **silently ignored** — no error, and both
+#: `cache_creation_input_tokens` and `cache_read_input_tokens` come back 0.
+#: Source: platform.claude.com/docs/en/build-with-claude/prompt-caching
+#:
+#: Our fixed prefix (system prompt ~1,997 + 9 tool schemas ~1,689) is ~3,690
+#: tokens — **406 short**. So on Haiku we currently pay full prefill every turn
+#: and cannot tell from the response that anything is wrong.
+#:
+#: This INVERTS the obvious optimisation. Trimming the prompt to save tokens
+#: pushes us further under the threshold and makes caching *less* likely to fire.
+#: The FAQ digest below (~529 tokens) was the first thing proposed for removal;
+#: removing it would take us to ~3,160 and lock Haiku out entirely.
+#:
+#: Other providers' minimums are all below our prefix and are unaffected:
+#: OpenAI 1,024 · Gemini 2,048 · DashScope 1,024.
+ANTHROPIC_CACHE_MIN_TOKENS = 4096
+
+
 def _faq_digest() -> str:
     lines = []
     for topic in faq.TOPICS:

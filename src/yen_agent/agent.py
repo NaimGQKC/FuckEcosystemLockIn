@@ -125,15 +125,22 @@ OPENAI_COMPATIBLE: dict[str, _OpenAICompatible] = {
     # Worth testing rather than assuming. These train on far more non-English
     # text than the US labs, which is the opposite of what our venue's
     # two-thirds-French call mix would suggest ignoring.
+    # Model IDs corrected against each vendor's own current model list — three of
+    # the names originally guessed here were stale. See docs/MODEL_SHORTLIST.md.
     "qwen": _OpenAICompatible(
         "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
-        "DASHSCOPE_API_KEY", "qwen-plus"),
-    "deepseek": _OpenAICompatible("https://api.deepseek.com/v1",
-                                  "DEEPSEEK_API_KEY", "deepseek-chat"),
+        "DASHSCOPE_API_KEY", "qwen3.7-plus"),   # "qwen-plus" is a legacy alias
     "moonshot": _OpenAICompatible("https://api.moonshot.ai/v1",
-                                  "MOONSHOT_API_KEY", "kimi-k2-turbo-preview"),
+                                  "MOONSHOT_API_KEY", "kimi-k2.6"),
     "zhipu": _OpenAICompatible("https://api.z.ai/api/paas/v4",
                                "ZHIPU_API_KEY", "glm-4.6"),
+    # deepseek: `deepseek-chat` no longer exists in DeepSeek's model list, and both
+    # current models default to THINKING mode — disqualifying on a TTFT budget.
+    "deepseek": _OpenAICompatible("https://api.deepseek.com/v1",
+                                  "DEEPSEEK_API_KEY", "deepseek-v4-flash"),
+    # mistral: `mistral-small-latest` now resolves to Mistral Small 4, which has no
+    # BFCL entry and no published latency. Every number circulating describes
+    # Mistral Small 3.2, retired 2026-07-31. Kept for testing, not recommended.
     "mistral": _OpenAICompatible("https://api.mistral.ai/v1",
                                  "MISTRAL_API_KEY", "mistral-small-latest"),
 }
