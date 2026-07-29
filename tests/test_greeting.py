@@ -73,14 +73,14 @@ def test_both_modes_lead_in_french():
     assert greeting_for(multilingual=True) == (GREETING_FR, DISCLOSURE_FR)
 
 
-def test_greeting_is_short_even_though_it_is_bilingual():
-    """"Bonjour, Hi" is the owner's own wording and the Montreal convention: it
-    covers both languages in three syllables, so the usual bilingual penalty
-    (saying everything twice) does not apply."""
+def test_greeting_is_french_only():
+    """The owner cut "Hi" after hearing it spoken: an English word inside a
+    French utterance made the line sound wrong. An anglophone still hears
+    "Bonjour", answers in English, and the STT switches us."""
     fr, _ = greeting_for(multilingual=True)
-    assert "bonjour" in fr.lower() and "hi" in fr.lower()
-    assert "how can i help" not in fr.lower()   # no full English sentence
-    assert len(fr.split()) <= 6
+    assert "bonjour" in fr.lower()
+    assert " hi" not in fr.lower() and "hello" not in fr.lower()
+    assert len(fr.split()) <= 5
 
 
 def test_greeting_names_the_restaurant_first():

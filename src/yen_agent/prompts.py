@@ -13,15 +13,13 @@ from . import faq
 #
 # Three deliberate decisions, in the order they matter:
 #
-# 1. FRENCH FIRST — and, per the owner, BOTH, because "Bonjour, Hi" costs
-#    nothing. We had argued this as French-only vs bilingual, on the grounds
-#    that saying everything twice makes the greeting longer — the exact defect
-#    we are fixing. The owner supplied the answer that dissolves the tradeoff:
-#    "Bonjour, Hi" is how Montreal retail actually answers the phone. It is
-#    three syllables, puts French first for the ~two-thirds of callers who
-#    speak it, and gives an anglophone a word they recognise immediately.
-#    Language switching still comes from the STT (`YEN_LANGUAGE_MODE=multi`,
-#    Deepgram nova-3 `language=multi`) off the caller's first words.
+# 1. FRENCH ONLY. The owner first suggested "Bonjour, Hi" — the Montreal retail
+#    convention — but on hearing it spoken by a French voice he cut the "Hi":
+#    an English word inside a French utterance made the whole line sound off.
+#    Judged by ear on a real call, which beats the argument we had on paper.
+#    Nothing is lost: an anglophone hears "Bonjour" and answers in English, and
+#    the STT (`YEN_LANGUAGE_MODE=multi`, Deepgram nova-3 `language=multi`)
+#    switches us on their first words.
 #
 # 2. UNDER ~1.5 SECONDS TO THE USEFUL PART. The previous greeting was 14 words;
 #    a model-generated one once ran to 13 seconds. This is ~1.4s of audio — a
@@ -31,7 +29,7 @@ from . import faq
 # 3. THE AI DISCLOSURE IS A SEPARATE, INTERRUPTIBLE SECOND CLAUSE — see below.
 #
 # Verbatim from the owner: "Bonjour, Hi. YEN Cuisine Japonaise".
-GREETING_FR = "Bonjour, Hi. YEN Cuisine Japonaise."
+GREETING_FR = "Bonjour. YEN Cuisine Japonaise."
 GREETING_EN = GREETING_FR
 
 # ---------------------------------------------------------------------
