@@ -224,7 +224,11 @@ DEEPGRAM_VOICE = "aura-2-thalia-en"
 #: Multilingual voice used when the greeting is French. Routed through LiveKit
 #: Inference, so it costs **no additional API key** — it authenticates with the
 #: LiveKit credentials the agent already needs to take a phone call at all.
-MULTILINGUAL_VOICE = "cartesia/sonic-3:fr"
+MULTILINGUAL_VOICE = "cartesia/sonic-3"
+#: Language passed alongside the model. Cartesia needs to be TOLD the language —
+#: it does not infer it from the text, and an unset language reads French with an
+#: English voice, which is the bug this constant exists to prevent.
+MULTILINGUAL_LANG = "fr"
 
 
 def _has_livekit_cloud() -> bool:
@@ -269,7 +273,8 @@ def _build_tts(settings: Settings):
     if _has_livekit_cloud():
         from livekit.agents import inference
 
-        return inference.TTS(model=MULTILINGUAL_VOICE)
+        return inference.TTS(model=MULTILINGUAL_VOICE,
+                             language=MULTILINGUAL_LANG)
 
     logger.warning(
         "No LiveKit credentials: falling back to the English-only Deepgram voice "
