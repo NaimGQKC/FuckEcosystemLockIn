@@ -89,7 +89,7 @@ A(P("Summary", "h"))
 A(P("The assistant answers the phone in French, understands English, and books "
     "real tables directly in your Libro account. It has been tested end to end "
     "and books correctly.", "p"))
-A(P("Running it costs roughly <b>$15 CAD per month</b>, against the "
+A(P("Running it costs roughly <b>$14 CAD per month</b>, against the "
     "<b>$275 CAD per month</b> currently being paid to the existing provider "
     "&mdash; a saving of about <b>$3,100 CAD per year</b>.", "p"))
 
@@ -97,15 +97,15 @@ A(Spacer(1, 8))
 A(table([
     [P("", "cellb"), P("Today", "cellb"), P("Proposed", "cellb")],
     [P("Monthly running cost", "cell"), P("~$275 CAD", "cell"),
-     P("<b>~$15 CAD</b>", "cell")],
+     P("<b>~$14 CAD</b>", "cell")],
     [P("Calls that reach a booking", "cell"), P("15%", "cell"),
      P("to be measured", "cell")],
     [P("Calls handed to a human", "cell"), P("43%", "cell"),
      P("to be measured", "cell")],
-    [P("Takeout callers helped", "cell"), P("none", "cell"),
-     P("captured for callback", "cell")],
+    [P("Takeout callers", "cell"), P("transferred or told<br/>to use the website", "cell"),
+     P("handled &mdash; see page 3", "cell")],
     [P("Cancellations by phone", "cell"), P("not possible", "cell"),
-     P("handled automatically", "cell")],
+     P("automatic", "cell")],
     [P("Who owns the call data", "cell"), P("the provider", "cell"),
      P("<b>you do</b>", "cell")],
 ], [2.25 * inch, 1.9 * inch, 2.2 * inch], align_right=()))
@@ -130,9 +130,10 @@ A(table([
        "&ldquo;vendredi prochain&rdquo;", "cell"), P("Working", "cell")],
     [P("Offers alternatives when the requested time is full", "cell"),
      P("Working", "cell")],
-    [P("Takes takeout requests for a callback", "cell"), P("Working", "cell")],
-    [P("Answers hours, address, parking and dietary questions; refuses to "
-       "quote prices or discuss complaints", "cell"), P("Working", "cell")],
+    [P("Handles takeout callers (~1 call in 6)", "cell"),
+     P("Working &mdash; method under review, page 3", "cell")],
+    [P("Answers hours, address, parking, dietary; never quotes prices", "cell"),
+     P("Working", "cell")],
     [P("Passes groups of 7+ to a person (Libro cannot hold those tables)", "cell"),
      P("Working", "cell")],
     [P("Dashboard showing every call, outcome and transcript", "cell"),
@@ -140,7 +141,7 @@ A(table([
     [P("Answering a real phone number", "cell"),
      P("<b>Next step</b> &mdash; needs the accounts below", "cell")],
     [P("Live transfer to a staff member", "cell"),
-     P("<b>Needs a decision</b> &mdash; see page 3", "cell")],
+     P("<b>Next</b> &mdash; details on page 3", "cell")],
 ], [4.0 * inch, 2.35 * inch]))
 
 A(PageBreak())
@@ -150,67 +151,71 @@ A(P("Costs", "title"))
 A(P("All amounts in Canadian dollars. Converted from USD at 1.37, which should "
     "be confirmed against the rate on the day of payment.", "sub"))
 
-A(P("Built on your own accounts throughout. Nothing is locked to a vendor: the "
-    "logic, the wording it uses and every call record belong to the restaurant, "
-    "and the system can be moved or handed to another developer without "
-    "rebuilding it.", "p"))
-
 A(P("One-time &mdash; development", "h"))
 A(table([
     [P("Item", "cellb"), P("Detail", "cellb"), P("Cost", "cellb")],
     [P("AI development tooling", "cell"),
-     P("Claude Max subscription, one month, used to build the system", "cellsm"),
-     P("$137", "cell")],
+     P("Claude Max subscription, one month, including taxes &mdash; used to "
+       "build the system", "cellsm"),
+     P("$160", "cell")],
     [P("Development time", "cell"),
-     P("To be agreed separately", "cellsm"), P("&mdash;", "cell")],
-    [P("<b>One-time total</b>", "cellb"), P("", "cell"), P("<b>$137</b>", "cellb")],
+     P("Not charged", "cellsm"), P("$0", "cell")],
+    [P("<b>One-time total</b>", "cellb"), P("", "cell"), P("<b>$160</b>", "cellb")],
 ], [1.9 * inch, 3.25 * inch, 1.2 * inch], align_right=(2,), band_last=True))
 
 A(Spacer(1, 4))
-A(P("This is a cost already incurred to build the system, not an ongoing "
-    "charge. It does not repeat.", "small"))
+A(P("A cost already incurred to build the system. It does not repeat. "
+    "Development time is not being charged.", "small"))
 
 A(P("Recurring &mdash; monthly running cost", "h"))
 A(table([
     [P("Service", "cellb"), P("What it does", "cellb"), P("Monthly", "cellb")],
     [P("Server hosting", "cell"),
-     P("Runs the assistant, always on, in Toronto", "cellsm"), P("$8.00", "cell")],
+     P("Runs the assistant, always on, in Toronto (Fly.io)", "cellsm"),
+     P("$4.40", "cell")],
     [P("Phone number", "cell"),
-     P("A Montreal 514 number, plus per-minute charges", "cellsm"),
-     P("$2.30", "cell")],
+     P("Montreal 514 number ($1.15/mo) plus inbound minutes (Twilio)", "cellsm"),
+     P("$2.90", "cell")],
     [P("Speech recognition", "cell"),
-     P("Understanding the caller, French and English", "cellsm"), P("$1.20", "cell")],
-    [P("Voice", "cell"), P("The French voice the caller hears", "cellsm"),
+     P("Understanding the caller, French and English (Deepgram)", "cellsm"),
+     P("$1.20", "cell")],
+    [P("Voice", "cell"),
+     P("The French voice the caller hears (Cartesia, billed via LiveKit)", "cellsm"),
      P("$1.80", "cell")],
     [P("Language model", "cell"),
-     P("Understanding what the caller wants", "cellsm"), P("$1.50", "cell")],
+     P("Understanding what the caller wants (Google Gemini)", "cellsm"),
+     P("$1.50", "cell")],
     [P("Call records database", "cell"),
-     P("Stored in Canada; free at this volume", "cellsm"), P("$0.00", "cell")],
+     P("Stored in Canada; free at this volume (Supabase)", "cellsm"),
+     P("$0.00", "cell")],
     [P("Call handling", "cell"),
-     P("Connects the phone line; free at this volume", "cellsm"), P("$0.00", "cell")],
+     P("Connects the phone line; free at this volume (LiveKit)", "cellsm"),
+     P("$0.00", "cell")],
+    [P("Subtotal", "cell"), P("", "cell"), P("$11.80", "cell")],
+    [P("Contingency (15%)", "cell"),
+     P("Rate changes, busier months, anything unforeseen", "cellsm"),
+     P("$1.80", "cell")],
     [P("<b>Recurring total</b>", "cellb"), P("", "cell"),
-     P("<b>~$15 / month</b>", "cellb")],
+     P("<b>~$14 / month</b>", "cellb")],
 ], [1.9 * inch, 3.25 * inch, 1.2 * inch], align_right=(2,), band_last=True))
 
 A(Spacer(1, 4))
-A(P("Based on your measured call volume: 102 calls and 111 minutes of "
-    "conversation per month. Most of this total is fixed &mdash; the server and "
-    "the phone number are about two thirds of it &mdash; so the cost changes "
-    "very little if calls increase. Roughly double the call volume before it "
-    "moves noticeably.", "small"))
+A(P("Based on your measured volume: 102 calls and 111 minutes per month. Most "
+    "of the total is fixed cost, so it changes very little as calls increase.",
+    "small"))
 
 A(P("Comparison", "h"))
 A(table([
     [P("", "cellb"), P("Per month", "cellb"), P("Per year", "cellb")],
     [P("Current provider", "cell"), P("~$275", "cell"), P("~$3,300", "cell")],
-    [P("Proposed", "cell"), P("~$15", "cell"), P("~$180", "cell")],
-    [P("<b>Saving</b>", "cellb"), P("<b>~$260</b>", "cellb"),
-     P("<b>~$3,120</b>", "cellb")],
+    [P("Proposed", "cell"), P("~$14", "cell"), P("~$170", "cell")],
+    [P("<b>Saving</b>", "cellb"), P("<b>~$261</b>", "cellb"),
+     P("<b>~$3,130</b>", "cellb")],
 ], [2.4 * inch, 1.85 * inch, 1.85 * inch], align_right=(1, 2), band_last=True))
 
 A(Spacer(1, 6))
-A(P("Every account is opened in the restaurant's name, and each provider bills "
-    "you directly. There is no markup on any of the figures above.", "small"))
+A(P("Every account is in the restaurant's name and each provider bills you "
+    "directly. No markup on any figure above.", "small"))
 
 A(PageBreak())
 
@@ -219,9 +224,8 @@ A(P("What happens next", "title"))
 A(P("Two things are needed from you, and one decision.", "sub"))
 
 A(P("1. Accounts to open", "h"))
-A(P("Each of these is opened in the restaurant's name so you own it outright. "
-    "Setup takes about half a day in total, and none of them need attention "
-    "afterwards.", "p"))
+A(P("Each is opened in the restaurant's name, so you own it outright. Setup is "
+    "about half a day in total; none need attention afterwards.", "p"))
 A(table([
     [P("Account", "cellb"), P("Why", "cellb"), P("Card needed", "cellb")],
     [P("Hosting (Fly.io)", "cell"), P("Runs the assistant", "cellsm"),
@@ -244,17 +248,21 @@ A(P("The assistant answers a brand-new 514 number. Your existing line, "
     "today. Nothing changes for your current callers until you decide to point "
     "them at it.", "p"))
 
-A(P("3. One decision we need from you", "h"))
-A(P("<b>When the assistant cannot help, what should happen?</b>", "h2"))
-A(P("You asked for the call to be transferred to a person. That is "
-    "straightforward to build &mdash; but you also mentioned that during a rush "
-    "the phone often goes unanswered, and a rush is exactly when the assistant "
-    "will be transferring. A transfer into an unanswered phone is worse for the "
-    "caller than what happens today.", "p"))
-A(P("Our suggestion: <b>transfer first, and if nobody picks up within a few "
-    "rings, take the caller's name and number so you can call them back.</b> "
-    "You get the live transfer you asked for, and nobody is lost when the room "
-    "is busy. Happy to build it either way &mdash; it is your call.", "p"))
+A(P("3. Escalation &mdash; confirming the details", "h"))
+A(P("Agreed and clear: <b>when the assistant cannot handle something, it "
+    "transfers the caller to a person</b> during opening hours. Outside hours it "
+    "gives them the email address instead. That is what will be built.", "p"))
+A(P("Two details to settle, because they change what gets built:", "p"))
+A(table([
+    [P("Question", "cellb"), P("Why it matters", "cellb")],
+    [P("If the transfer rings out, what then?", "cell"),
+     P("Take their name and number so you can call back, or simply let it ring? "
+       "Either is fine &mdash; we just need to pick one.", "cellsm")],
+    [P("Takeout &mdash; transfer, or take the details?", "cell"),
+     P("About one call in six. Transferring rings the restaurant during "
+       "service; taking the details lets someone call back when it suits.",
+       "cellsm")],
+], [2.3 * inch, 4.05 * inch]))
 
 A(P("Timeline", "h"))
 A(table([
@@ -265,16 +273,14 @@ A(table([
     [P("Then", "cell"),
      P("You and I call the test number and listen to it work", "cell")],
     [P("Go live", "cell"),
-     P("Point calls at it &mdash; starting with overflow only, so it answers "
-       "only when nobody else can", "cell")],
+     P("Start with overflow only &mdash; it answers when nobody else can", "cell")],
 ], [1.2 * inch, 5.15 * inch]))
 
-A(Spacer(1, 8))
-A(rule())
-A(P("A note on the figures: the running costs are provider list prices applied "
-    "to your measured call volume. Nothing here has been on a real invoice yet, "
-    "so the first month should be treated as the number to confirm. The $275 "
-    "comparison figure is taken from your current provider's invoice.", "small"))
+A(Spacer(1, 10))
+A(P("On the figures: running costs are provider list prices applied to your "
+    "measured call volume, and none has appeared on a real invoice yet &mdash; "
+    "treat the first month as the number to confirm. The $275 comparison comes "
+    "from your current provider's invoice.", "small"))
 
 SimpleDocTemplate(
     OUT, pagesize=LETTER,
