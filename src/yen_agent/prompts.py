@@ -96,9 +96,13 @@ def greeting_for(multilingual: bool) -> tuple[str, str]:
     the caller can interrupt between them, and the agent needs to know which of
     the two actually reached them.
     """
-    if multilingual:
-        return GREETING_FR, DISCLOSURE_FR
-    return GREETING_EN, DISCLOSURE_EN
+    # Both are FRENCH-LEADING in every mode, because the greeting is. Returning
+    # the English disclosure after a French greeting produced exactly what a
+    # first live test caught: "Bonjour, Hi. YEN Cuisine Japonaise." followed by
+    # "AI assistant — how can I help?" — two languages, two registers, in the
+    # first three seconds. The caller has not spoken yet, so there is nothing to
+    # match against; we lead French and switch off their first words.
+    return GREETING_FR, DISCLOSURE_FR
 
 
 def disclosure_reminder(multilingual: bool) -> str:

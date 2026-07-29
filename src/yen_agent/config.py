@@ -46,7 +46,9 @@ class Settings:
     #: Swap with YEN_LLM_PROVIDER; every alternative is a .env change.
     llm_provider: str = "google"
     llm_model: str = ""  # optional override, e.g. "gpt-4o-mini"
-    language_mode: str = "en"  # en | multi
+    #: Default `multi`: ~2/3 of this venue's callers speak French, and the
+    #: greeting is bilingual in every mode, so English-only was never right.
+    language_mode: str = "multi"  # multi | en
 
     #: TTS voice override. A value containing "/" (e.g. "elevenlabs/eleven_flash_v2_5")
     #: is routed through LiveKit Inference on the existing LiveKit key; anything
@@ -85,7 +87,7 @@ class Settings:
             libro_private_restaurant_id=_env("LIBRO_PRIVATE_RESTAURANT_ID", "8169"),
             llm_provider=_env("YEN_LLM_PROVIDER", "google"),
             llm_model=_env("YEN_LLM_MODEL", ""),
-            language_mode=_env("YEN_LANGUAGE_MODE", "en"),
+            language_mode=_env("YEN_LANGUAGE_MODE", "multi"),
             tts_model=_env("YEN_TTS_MODEL", ""),
             aec_warmup_s=_env_float("YEN_AEC_WARMUP_S", 0.0),
             db_path=_env("YEN_DB_PATH", "yen_calls.db"),

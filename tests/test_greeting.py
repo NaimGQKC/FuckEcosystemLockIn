@@ -66,16 +66,21 @@ def test_multilingual_mode_greets_in_french_first():
     assert "bonjour" in greeting.lower()
 
 
-def test_english_only_mode_still_greets_in_english():
-    greeting, disclosure = greeting_for(multilingual=False)
-    assert (greeting, disclosure) == (GREETING_EN, DISCLOSURE_EN)
+def test_both_modes_lead_in_french():
+    """A French greeting followed by an English disclosure is two languages in
+    the first three seconds. A live test caught exactly that."""
+    assert greeting_for(multilingual=False) == (GREETING_FR, DISCLOSURE_FR)
+    assert greeting_for(multilingual=True) == (GREETING_FR, DISCLOSURE_FR)
 
 
-def test_greeting_is_not_bilingual():
-    """Saying it twice makes it longer, which is the defect we're fixing."""
+def test_greeting_is_short_even_though_it_is_bilingual():
+    """"Bonjour, Hi" is the owner's own wording and the Montreal convention: it
+    covers both languages in three syllables, so the usual bilingual penalty
+    (saying everything twice) does not apply."""
     fr, _ = greeting_for(multilingual=True)
-    assert "hello" not in fr.lower()
-    assert "how can i help" not in fr.lower()
+    assert "bonjour" in fr.lower() and "hi" in fr.lower()
+    assert "how can i help" not in fr.lower()   # no full English sentence
+    assert len(fr.split()) <= 6
 
 
 def test_greeting_names_the_restaurant_first():
@@ -301,12 +306,12 @@ async def test_barge_in_during_the_disclosure_also_defers_it(greeting_mod):
     assert "Disclosure not yet heard" in agent.instructions
 
 
-async def test_english_mode_speaks_the_english_pair(greeting_mod):
+async def test_every_mode_uses_the_owners_bilingual_greeting(greeting_mod):
     session, agent = _FakeSession(), _FakeAgent()
     tele = greeting_mod.GreetingTelemetry()
     tele.mark_answered()
     await greeting_mod._speak_greeting(session, agent, Settings(), tele, "BASE")
-    assert [t for t, _ in session.said] == [GREETING_EN, DISCLOSURE_EN]
+    assert [t for t, _ in session.said] == [GREETING_FR, DISCLOSURE_FR]
 
 
 # --------------------------------------------------------------------------
@@ -356,7 +361,7 @@ def test_tts_model_env_override_wins(monkeypatch):
     assert "deepgram" in type(tts).__module__
 
 
-def test_multilingual_without_livekit_credentials_warns_loudly(monkeypatch, caplog):
+def test_without_livekit_credentials_warns_loudly(monkeypatch, caplog):
     """Falling back to an English voice for a French greeting must not be quiet."""
     agent_mod = pytest.importorskip("yen_agent.agent")
     monkeypatch.delenv("LIVEKIT_API_KEY", raising=False)

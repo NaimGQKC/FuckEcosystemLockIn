@@ -224,7 +224,7 @@ DEEPGRAM_VOICE = "aura-2-thalia-en"
 #: Multilingual voice used when the greeting is French. Routed through LiveKit
 #: Inference, so it costs **no additional API key** — it authenticates with the
 #: LiveKit credentials the agent already needs to take a phone call at all.
-MULTILINGUAL_VOICE = "elevenlabs/eleven_flash_v2_5"
+MULTILINGUAL_VOICE = "cartesia/sonic-3:fr"
 
 
 def _has_livekit_cloud() -> bool:
@@ -261,18 +261,24 @@ def _build_tts(settings: Settings):
             return inference.TTS(model=override)
         return deepgram.TTS(model=override)
 
-    if settings.is_multilingual:
-        if _has_livekit_cloud():
-            from livekit.agents import inference
+    # The greeting is "Bonjour, Hi. YEN Cuisine Japonaise" in EVERY mode, so the
+    # voice must speak French regardless of YEN_LANGUAGE_MODE. Gating this on
+    # is_multilingual was a bug: with the flag unset the agent read a French
+    # greeting through an English-only Deepgram voice, which is precisely the
+    # mangled pronunciation this whole choice exists to avoid.
+    if _has_livekit_cloud():
+        from livekit.agents import inference
 
-            return inference.TTS(model=MULTILINGUAL_VOICE)
-        logger.warning(
-            "Multilingual mode without LiveKit credentials: falling back to the "
-            "English-only Deepgram voice %s. The French greeting WILL be "
-            "mispronounced — set LIVEKIT_API_KEY/LIVEKIT_URL, or set "
-            "YEN_TTS_MODEL, before putting this on a real line.",
-            DEEPGRAM_VOICE,
-        )
+        return inference.TTS(model=MULTILINGUAL_VOICE)
+
+    logger.warning(
+        "No LiveKit credentials: falling back to the English-only Deepgram voice "
+        "%s. The greeting is 'Bonjour, Hi. YEN Cuisine Japonaise' in every mode, "
+        "so the French WILL be mispronounced — this was caught on the first live "
+        "test. Set LIVEKIT_API_KEY/LIVEKIT_URL, or YEN_TTS_MODEL, before putting "
+        "this on a real line.",
+        DEEPGRAM_VOICE,
+    )
     return deepgram.TTS(model=DEEPGRAM_VOICE)
 
 
