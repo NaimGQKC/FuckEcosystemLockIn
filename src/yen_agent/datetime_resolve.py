@@ -31,8 +31,14 @@ MONTHS = {
     "oct": 10, "november": 11, "nov": 11, "december": 12, "dec": 12,
 }
 
-#: Don't accept bookings further out than this (config-ish placeholder).
-MAX_HORIZON_DAYS = 180
+#: Don't accept bookings further out than this.
+#:
+#: The owner reports Libro's window is "2-3 months, I need to check" — so 90 days
+#: is the conservative reading of an unconfirmed answer. Erring short is the safe
+#: direction: refusing a bookable date is a mildly annoyed caller, while accepting
+#: a date Libro rejects fails *after* we have told the guest they have a table.
+#: TODO: confirm the real Libro horizon and widen if it is 3 months.
+MAX_HORIZON_DAYS = 90
 
 
 def _roll_forward(year: int, month: int, day: int, today: dt.date) -> dt.date | None:

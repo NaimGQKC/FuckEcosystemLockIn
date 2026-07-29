@@ -59,8 +59,8 @@ async def test_book_lookup_reschedule_cancel_roundtrip(service):
     assert [b.id for b in found] == [booking.id]
 
     # Reschedule to another open time.
-    moved = await service.reschedule_booking(booking.id, new_time=slot_time(date, "20:30"))
-    assert moved.time == slot_time(date, "20:30")
+    moved = await service.reschedule_booking(booking.id, new_time=slot_time(date, "20:00"))
+    assert moved.time == slot_time(date, "20:00")
 
     # Cancel it.
     cancelled = await service.cancel_booking(booking.id)

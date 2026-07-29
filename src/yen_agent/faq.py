@@ -47,8 +47,11 @@ FAQ: dict[str, dict[str, str]] = {
         "fr": "Nous sommes au 2157, rue Mackay. Je peux vous envoyer un lien vers la carte par texto.",
     },
     "parking": {
-        "en": "There's limited street parking available through the city.",
-        "fr": "Il y a un stationnement de rue limité, géré par la ville.",
+        "en": ("We're a five-minute walk from Guy-Concordia metro, on the Concordia "
+               "campus. Parking is limited paid street parking from the city."),
+        "fr": ("Nous sommes à cinq minutes de marche du métro Guy-Concordia, sur le "
+               "campus de Concordia. Le stationnement est limité — du stationnement "
+               "de rue payant de la ville."),
     },
     "accessibility": {
         "en": ("I should mention there are four or five steps going down — our unit "
@@ -58,11 +61,20 @@ FAQ: dict[str, dict[str, str]] = {
     },
     "dietary": {
         "en": ("We do have fish, soy and gluten in our kitchen. We have many "
-               "vegetarian options, though we're not able to do vegan. Only our "
-               "chicken is halal."),
+               "vegetarian options; we can't always fully accommodate vegan, but "
+               "we'll do what we can. Our chicken is halal. Just let the staff know "
+               "about any allergies or restrictions and we'll do our best."),
         "fr": ("Nous avons du poisson, du soja et du gluten dans notre cuisine. Nous "
-               "avons plusieurs options végétariennes, mais nous ne pouvons pas faire "
-               "de végétalien. Seul notre poulet est halal."),
+               "avons plusieurs options végétariennes; pour le végétalien nous ne "
+               "pouvons pas toujours tout accommoder, mais nous ferons de notre "
+               "mieux. Notre poulet est halal. Dites-le au personnel et nous ferons "
+               "tout notre possible."),
+    },
+    "about": {
+        "en": ("We're a chic Japanese bistro with a large and diverse menu — premium "
+               "ingredients at accessible prices."),
+        "fr": ("Nous sommes un bistro japonais chic avec un menu vaste et varié — des "
+               "ingrédients de qualité à prix accessibles."),
     },
     "kids": {
         "en": "We don't have a kids menu, and we have one high chair available.",
@@ -146,9 +158,19 @@ FAQ: dict[str, dict[str, str]] = {
         "fr": ("Je peux réserver, modifier ou annuler une table pour vous tout de suite. "
                "Pour les groupes de plus de sept, je prendrai un message pour notre équipe."),
     },
-    # NOTE: intentionally absent — the venue has never defined it. The agent must
-    # take a message rather than invent a policy:
-    #   "cancellation_policy"
+    # The owner's answer, verbatim, was "No cancellation/No-show" — read as: there
+    # is no penalty or fee, not that cancelling is forbidden. Worded here so it is
+    # true under either reading, and flagged for confirmation.
+    # TODO: confirm the intended meaning before launch.
+    "cancellation_policy": {
+        "en": ("There's no cancellation fee and no no-show charge — just let us know "
+               "if your plans change so we can free the table."),
+        "fr": ("Il n'y a pas de frais d'annulation ni de frais pour absence — "
+               "faites-nous simplement signe si vos plans changent, pour que nous "
+               "puissions libérer la table."),
+    },
+    # Prices are deliberately absent: the owner asked the agent NEVER to discuss
+    # them and to redirect to the online menu instead. See prompts.py.
 }
 
 TOPICS = sorted(FAQ.keys())

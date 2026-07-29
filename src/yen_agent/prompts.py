@@ -13,22 +13,26 @@ from . import faq
 #
 # Three deliberate decisions, in the order they matter:
 #
-# 1. FRENCH FIRST, NOT BILINGUAL. Roughly two-thirds of this venue's calls are
-#    in French. A francophone who hears English decides "this won't understand
-#    me" instantly. Saying it in *both* languages would make the greeting longer
-#    — which is the exact defect we are fixing — so we pick the majority
-#    language and let the STT (`YEN_LANGUAGE_MODE=multi`, Deepgram nova-3
-#    `language=multi`) switch us to English off the caller's first words.
-#    "YEN, bonjour !" is also how a Montreal restaurant actually answers the
-#    phone, so an anglophone caller is not confused by it either.
+# 1. FRENCH FIRST — and, per the owner, BOTH, because "Bonjour, Hi" costs
+#    nothing. We had argued this as French-only vs bilingual, on the grounds
+#    that saying everything twice makes the greeting longer — the exact defect
+#    we are fixing. The owner supplied the answer that dissolves the tradeoff:
+#    "Bonjour, Hi" is how Montreal retail actually answers the phone. It is
+#    three syllables, puts French first for the ~two-thirds of callers who
+#    speak it, and gives an anglophone a word they recognise immediately.
+#    Language switching still comes from the STT (`YEN_LANGUAGE_MODE=multi`,
+#    Deepgram nova-3 `language=multi`) off the caller's first words.
 #
 # 2. UNDER ~1.5 SECONDS TO THE USEFUL PART. The previous greeting was 14 words;
-#    a model-generated one once ran to 13 seconds. Two words is ~0.9s of audio.
-#    The caller can start talking almost immediately, which is the whole point.
+#    a model-generated one once ran to 13 seconds. This is ~1.4s of audio — a
+#    little longer than the two-word version it replaces, and worth it for
+#    being the venue's real greeting rather than one we invented.
 #
 # 3. THE AI DISCLOSURE IS A SEPARATE, INTERRUPTIBLE SECOND CLAUSE — see below.
-GREETING_FR = "YEN, bonjour !"
-GREETING_EN = "YEN, hello!"
+#
+# Verbatim from the owner: "Bonjour, Hi. YEN Cuisine Japonaise".
+GREETING_FR = "Bonjour, Hi. YEN Cuisine Japonaise."
+GREETING_EN = GREETING_FR
 
 # ---------------------------------------------------------------------
 # The AI-disclosure tradeoff (decided here, on purpose, in writing)
@@ -164,7 +168,8 @@ def system_instructions(*, multilingual: bool, today: str = "") -> str:
   take their order in their own words plus a number and call `handle_takeout`.
 
 # How seating works (the reservation system handles the table math — you explain it)
-- The room is small: a few 2-tops and 4-tops, one 6-top, and a sushi counter. The
+- The room is small and is **tables only — there is no sushi bar or counter**, so
+  never offer counter seating. The
   system automatically picks the right table, and for a larger party it combines
   ("merges") tables when it can. If `check_availability` or `book_reservation` says a
   combined table is involved, mention it naturally ("we'll set up a combined table").
@@ -197,6 +202,10 @@ def system_instructions(*, multilingual: bool, today: str = "") -> str:
   allergy wrong is the most serious mistake you can make on this call.
 
 # Rules
+- **Never quote or discuss prices.** If asked what something costs, say the menu
+  with prices is on our website and offer to text or point them to it. Do not
+  estimate, compare, or describe anything as cheap or expensive.
+- Never discuss complaints, disputes, fines, or anything legal — offer a person.
 - Never guess hours, address, menu, or policies. Only state facts from `answer_faq`.
   If it isn't there, take a message — do not improvise a plausible answer.
 - **Never tell a caller we're closed or full before you've actually checked.** Posted

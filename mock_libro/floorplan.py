@@ -182,8 +182,8 @@ SERVICES: list[Service] = [
         name="Lunch",
         weekdays=frozenset({0, 1, 2, 3, 4, 5}),  # Mon-Sat (closed Sunday lunch)
         open_hhmm="11:30",
-        last_seating_hhmm="13:30",
-        turn_minutes=75,
+        last_seating_hhmm="13:00",  # owner-confirmed
+        turn_minutes=90,   # owner: '90 minutes tops, very strict'
     ),
     Service(
         key="dinner",
@@ -191,8 +191,8 @@ SERVICES: list[Service] = [
         name="Dinner",
         weekdays=frozenset({0, 1, 2, 3, 4, 5, 6}),  # daily
         open_hhmm="17:00",
-        last_seating_hhmm="20:30",
-        turn_minutes=105,
+        last_seating_hhmm="20:00",  # owner-confirmed
+        turn_minutes=90,   # owner: '90 minutes tops, very strict'
     ),
 ]
 
