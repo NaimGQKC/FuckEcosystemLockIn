@@ -61,7 +61,7 @@ Try: *"Do you have a table for two tomorrow at seven?"*
 This runs against a **fake restaurant**. Nothing you do here touches YEN.
 
 > **Expect rough edges on the first run.** Nobody has spoken to this system yet;
-> 221 tests cover the logic, not the voice. Finding two or three problems here is
+> 231 tests cover the logic, not the voice. Finding two or three problems here is
 > the point of doing it.
 
 ---

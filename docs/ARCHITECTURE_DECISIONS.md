@@ -23,9 +23,11 @@ Two consequences worth stating up front, because they reverse earlier decisions:
 
 * **Free tiers are a liability, not a saving.** A free tier that lapses takes the
   restaurant's phone down. Production runs on paid plans with a card on file.
-* **Fewer vendors beats better vendors.** Each extra provider is another key that
-  can expire and another bill that can fail. We consolidated onto Deepgram for
-  both STT and TTS and dropped Cartesia entirely.
+* **Fewer *accounts* beat fewer vendors.** Each extra provider is another key that
+  can expire and another bill that can fail — but that concern is about
+  credentials, not logos. The French voice is Cartesia, and it is fine precisely
+  because it bills through LiveKit Inference on credentials we already have. No
+  new account, no new key.
 
 ---
 
@@ -71,7 +73,7 @@ cancellation, and bridging phone calls in over SIP.
 - Built for **streaming** — partial results as the caller speaks, which is what makes sub-second response possible. Whisper is batch-first; it transcribes after you stop talking.
 - **Trained on telephony audio.** Phone calls are 8 kHz narrowband — much worse than a podcast mic — and most models are trained on clean audio.
 - **Real-time code-switching across 10 languages** including French — one setting turns on EN/FR auto-detection, which Montreal needs.
-- $200 free credit, per-second billing, and it does **both STT and TTS on one key**.
+- $200 free credit and per-second billing. (It can also do TTS, and Aura-2 does support French — we route the voice through LiveKit Inference instead, see below.)
 
 **What we gave up / what worries me**
 - **No published French-Canadian accuracy figure for Nova-3.** An independent Québécois benchmark (CRIM, 24 models) puts `whisper-large-v3-turbo` at 8.2% word error rate and shows that models topping the standard benchmarks can do *badly* on real Québécois. We're choosing partly on faith.
@@ -80,68 +82,36 @@ cancellation, and bridging phone calls in over SIP.
 
 ---
 
-## Text-to-speech: Deepgram Aura-2 in English, a multilingual voice in French
+## Text-to-speech: Cartesia `sonic-3` (French), via LiveKit Inference
 
-**Alternatives:** ElevenLabs, Cartesia, OpenAI, Azure, AWS Polly.
+**Alternatives:** Deepgram Aura-2, ElevenLabs, OpenAI, Azure, AWS Polly.
 
-**Why Deepgram for English:** Aura-2 is the cheapest good option (~$0.018/min) and shares the Deepgram key — measured **240ms to first audio** in our own logs, which is excellent. ElevenLabs sounds best but costs 3-6x.
+**Why.** The greeting is French-only — *"Bonjour. YEN Cuisine Japonaise."* — at a venue where two-thirds of calls are in French. It has to sound like a French speaker said it. Cartesia `sonic-3` does, it is fast, and it bills **through LiveKit Inference on the LiveKit credentials the agent already needs**. That last part is the whole reason it won: no extra vendor account, no extra key to expire unattended. `YEN_TTS_PROVIDER` and `CARTESIA_API_KEY` are **not read by anything** — the routing is entirely `_has_livekit_cloud()` in `agent.py`.
 
-### ⚠️ Correction: an earlier version of this document was wrong
+**Cost:** ~$50/1M chars. At this venue's ~90 talk-minutes/month that is under $2, so it does not move the economics.
 
-It was headed *"Deepgram Aura-2 (both languages)"* and justified dropping Cartesia partly on the basis that Deepgram covered French. **It does not.** Verified directly against the installed plugin:
+**What we gave up — a real problem for Montreal.** None of the fast providers (Cartesia, Deepgram, ElevenLabs, OpenAI) has a genuine **Québécois** voice; `sonic-3` speaks European French. Real fr-CA voices exist essentially only on **Azure** and **AWS Polly (Gabrielle)**, both slower stacks with their own account. Whether a Parisian accent actually costs trust in Montreal is **untested** — we can't A/B on real diners. Worth revisiting once there's volume.
 
-```
-livekit.plugins.deepgram.models.TTSModels
-  -> 58 models, EVERY id ends in "-en". Zero non-English voices.
-```
+### Two earlier claims in this file that were wrong
 
-Deepgram TTS is English-only. An English voice reading *"YEN, bonjour !"* produces exactly the mangled, obviously-foreign pronunciation that makes a Québécois caller hang up — which defeats the French-first greeting it was meant to serve, at a venue where **two-thirds of calls are in French**.
-
-The original reason for dropping Cartesia still stands (we never had a key, it was never exercised in a real call, and an extra vendor account is an extra credential to expire unattended). What was wrong was the claim that Deepgram filled the gap.
-
-**The fix, and why it keeps the property we actually cared about.** In multilingual mode we route to a multilingual voice through **LiveKit Inference**, which authenticates on the **LiveKit credentials the agent already requires** — so there is still no additional vendor account and no additional key to expire. That was the real unattended-reliability concern; "one vendor" was only ever a proxy for it.
-
-Without LiveKit credentials (plain `console` mode) it falls back to Deepgram and **logs a loud warning**, because French through an English voice must be discovered in a log line, not on a live call.
-
-**Cost:** ElevenLabs-class voices run several times Deepgram's rate. At this venue's ~90 talk-minutes/month that is single-digit dollars, so it does not change the economics — but it is a real increase and worth re-checking if volume grows.
-
-**What we gave up — and this one is a real problem for Montreal.** None of the fast providers (Deepgram, ElevenLabs, Cartesia, OpenAI) has a genuine **Québécois** voice. Real fr-CA voices exist essentially only on **Azure** and **AWS Polly (Gabrielle)** — the slower stacks. So for French we may have to trade latency for sounding local. Whether a Parisian accent actually costs trust in Montreal is **untested** — worth making our own A/B once there's volume.
+1. It said Deepgram TTS is English-only, verified as *"58 models, every id ends in `-en`"*. That was true of **Aura-1**. **Aura-2 does support `fr`/`fr-FR`** (`aura-2-agathe-fr`, `aura-2-hector-fr`) — see `STACK_DECISION.md` §3.4. Aura-2 is ~40% cheaper than Cartesia and equally zero-account, so it is a live candidate if we ever run a listening test. It is not currently wired.
+2. It said English used Deepgram and French used something else. There is **one voice now**, French, for every call.
 
 ---
 
-## LLM: Groq (Llama 3.3 70B), swappable
+## LLM: Google Gemini 2.5 Flash, swappable
 
-**Alternatives tried in this project:** Google Gemini, xAI Grok, OpenAI, Cerebras, LiveKit Inference.
+**Alternatives tried in this project:** Groq (Llama 3.3 70B), xAI Grok, OpenAI, Cerebras, Anthropic, and six OpenAI-compatible providers still wired in `agent.py`.
 
-**Why Groq**
-- **Purpose-built inference hardware** (LPUs) → the fastest first-token latency available, which is the single biggest contributor to voice lag.
-- OpenAI-compatible API, so switching costs nothing.
-- Its free tier (~30 req/min) is generous enough for development. Gemini's is **20 requests per day** — one conversation exhausted it and killed our first live test.
+**Why Gemini 2.5 Flash.** Cheap, fast enough, and reliable at the only thing we ask of it: pick the right tool with the right arguments. Roughly $1.50 CAD/month at this venue's volume.
 
-**Production note: we do not ship on a free tier.** The free tier is a development convenience only. An unattended restaurant phone line cannot depend on a quota that can lapse or be revoked without notice — production runs on a paid plan with a card on file. At this volume that is a couple of dollars a month.
+**Production note: we do not ship on a free tier.** Gemini's free tier is a development convenience and it is thin — it rate-limited us mid-way through the first live voice test. An unattended restaurant phone line cannot depend on a quota that can lapse without notice. **Billing must be enabled before the line goes live.** This is an open item.
 
-**What we gave up**
-- Open-weight models are **weaker at tool calling** than GPT-4-class models. Our tools are simple, so it holds — but it's the reason to keep the swap easy.
+**Why not Groq, which this document used to recommend.** The Groq investigation is preserved in `LLM_BENCHMARK.md` and its findings still stand on their own terms — the binding free-tier limit is tokens not requests, and downgrading to an 8B model makes throttling *worse* because it has half the TPM. What changed is that Gemini is cheaper at our volume and did not need the 70B's paid plan to be usable. `scripts/benchmark_llm.py` still runs and still targets Groq; treat it as the harness that produced that record, not as current configuration.
 
-### The model decision — investigated, and the obvious answer was wrong
-
-`llama-3.3-70b-versatile` measured a **3.55s worst-case** first token, ~4x over budget. The obvious fix is "use a smaller model". **Three findings say don't.**
-
-**1. The binding free-tier limit is tokens, not requests.** Our fixed per-turn prompt is **~3,450 tokens** (system prompt ~1,995 + 9 tool schemas ~1,457). Against the free tier's 12,000 TPM that is **~3.5 requests/minute** — a live call needs 6–12. The 30 RPM cap binds 8.6x later and is a red herring. Groq's prompt caching would fix it, but it supports `gpt-oss-*` models only, so our prefix is re-billed every turn.
-
-**2. The naive fix makes it worse.** `llama-3.1-8b-instant` has **6,000 TPM — half** the 70B's. If throttling is the cause, downgrading increases throttling *and* costs tool accuracy.
-
-**3. A concrete mechanism for 3.55s.** `livekit-agents` defaults `retry_interval=2.0`. One retry (2.0s) on top of a normal ~1.5s generation ≈ 3.5s. A discrete retry explains a **bimodal** worst case far better than inference slowness, which scales smoothly.
-
-**Correction to an earlier claim.** This document previously cited a 24-point BFCL gap between an 8B model and GPT-4o-mini. That figure is for **Llama-3-8B**, not the `llama-3.1-8b-instant` we would actually ship; secondary sources put the 3.1 generation at ~76% vs ~85%. Still a bad trade for a booking agent, but roughly **9 points**, not 24.
-
-**Decision: keep the 70B, move to a paid plan, don't downgrade.** Confidence **~70%** that queueing dominates the 3.55s — not higher, because we found *no* community reports of multi-second free-tier Groq TTFT, which is real evidence against the hypothesis.
-
-**This is also robust to being wrong about latency:** at ~3,450 tokens/turn the free tier's daily cap affords roughly **2 calls/day** and this venue takes ~3.2. Free is unusable on volume alone.
-
-**What settles it.** Groq returns `queue_time`, `prompt_time` and `completion_time` on every response — it decomposes TTFT for us. `scripts/benchmark_llm.py` records all three. If queue p90 is a large share of TTFT p90, it's rate limiting and paying fixes it; if queue ≈ 0 and prefill dominates, it's prompt size and paying will not help latency. **Not yet run — no API keys in this environment.**
-
-**A separate lever worth noting:** ~3,450 tokens of fixed prompt on *every turn* is itself large. Trimming the system prompt and tool schemas would cut latency and cost on any provider.
+**Known open, both measured:**
+- **First token is 1.16–1.48s** against a 200–700ms budget. It feels slightly slow.
+- **Prompt caching is not firing** (`prompt_cached_tokens: 0`), so every turn pays full prefill. The prompt is already ordered for it — the volatile date line sits at the **end**, which takes the shared prefix across days from 0% to 99%. Note that Anthropic's cache has a **4,096-token minimum** and our prefix is ~3,690, so trimming the prompt would lock caching out entirely on that provider. See `ANTHROPIC_CACHE_MIN_TOKENS` in `prompts.py`.
 
 **Key design point:** the LLM is the *most* replaceable part. It only converses and calls tools; it never does math, dates, or availability. That's deliberate — see below.
 
@@ -156,7 +126,7 @@ the real Libro API.
 
 **Why it matters**
 - We built and tested the entire agent for days **before** we had any Libro access.
-- When the real API turned out to be **completely different** from the documented one (per-endpoint API versions, "services" that are actually 15-minute slots, a datetime derived from a relationship rather than a field), **only one file changed.** The agent, tools, prompts and 83 tests were untouched.
+- When the real API turned out to be **completely different** from the documented one (per-endpoint API versions, "services" that are actually 15-minute slots, a datetime derived from a relationship rather than a field), **only one file changed.** The agent, tools, prompts and every test were untouched.
 - It makes the system **testable without the network** — the whole suite runs in ~6 seconds with no API keys.
 - It's the anti-lock-in mechanism: swapping Libro for OpenTable is one new file.
 
@@ -194,7 +164,7 @@ restaurants with concurrent writers, revisit — that is the trigger, not taste.
 
 ---
 
-## Telephony (Phase 2, not built yet): Twilio
+## Telephony (chosen, not yet wired): Twilio
 
 **Alternatives:** Telnyx, Plivo, Vonage, LiveKit's own numbers.
 
@@ -204,14 +174,17 @@ restaurants with concurrent writers, revisit — that is the trigger, not taste.
 
 ---
 
-## For the operator webapp (decision pending)
+## The operator dashboard — built, `src/yen_agent/dashboard.py`
 
-| Choice | Recommendation | Why |
+| Choice | What we did | Why |
 |---|---|---|
 | Backend | **FastAPI** | Already in the stack; same language as the agent; async |
-| Database | **Postgres** | Concurrent writes, JSON columns for transcripts, real numeric types |
-| Frontend | **Server-rendered HTML + a little JS**, not React | It's a call list, a transcript view, and a few counters for one restaurant. A React/Next.js build adds a toolchain, a deploy target, and hours of work for a page that renders a table. **Reach for React when there's real client-side state — there isn't.** |
-| Charts | A small chart library, or plain HTML/CSS bars | Same reasoning |
+| Database | **SQLite (WAL) locally, Supabase Postgres in production** | WAL is what lets the dashboard read a live database while a call is in progress without ever blocking the agent. Supabase `ca-central-1` keeps guest PII in Canada under Law 25. |
+| Frontend | **Server-rendered HTML**, no React | It's a call list, a transcript view, and a few counters for one restaurant. A React/Next.js build adds a toolchain, a deploy target, and hours of work for a page that renders a table. **Reach for React when there's real client-side state — there isn't.** |
+| Charts | Plain HTML/CSS bars | Same reasoning |
+| Access | Token via `hmac.compare_digest`, phone numbers masked unless `?full=1` | It shows guest names. |
+
+The honest interview answer here is *"we chose the boring option deliberately, because the complexity budget belongs in the voice pipeline, not in the admin page."*
 
 The honest interview answer here is *"we chose the boring option deliberately, because the complexity budget belongs in the voice pipeline, not in the admin page."*
 
@@ -225,18 +198,21 @@ fool yourself.
 | Claim | Status |
 |---|---|
 | Booking against **real Libro**, real restaurant | ✅ **Proven.** Booking `111634069` created on `api.libroreserve.com` (restaurant 8169), requested 11:30 EDT returned as `2026-09-08T15:30:00Z` — exact — then cancelled and independently verified. |
-| Conversation logic, dates, phone parsing, the cascade | ✅ Proven by 93 tests. |
-| **Table merging / combining tables** | ❌ **NOT proven, and not real.** That runs on `mock_libro/floorplan.py`, an *invented* floor plan. Real Libro does its own seating; the live adapter never calls it. Do not cite the demo as evidence about YEN's dining room. |
-| **Voice → real Libro, end to end** | ❌ **Never run.** Text-mode logic against real Libro: yes. Someone actually *speaking* to the agent while it books a real table: never. This is the biggest untested gap. |
-| French-Canadian speech accuracy | ❌ Unvalidated. Chosen on reputation. |
-| Latency under real phone conditions | ❌ Unmeasured end to end. |
+| Conversation logic, dates, phone parsing, the cascade | ✅ Proven by 231 tests. |
+| **Voice → real Libro, end to end** | ✅ **Proven.** A spoken call reached `check_availability` with every argument correct (`party_size=2`, `part_of_day="dinner"`, `date="tomorrow"`, `preferred_time="seven"`), read the number back, and booked. Language switching worked mid-call. |
+| **Table merging / combining tables** | ❌ **NOT proven, and not real.** That runs on `mock_libro/floorplan.py`, an *invented* floor plan. Real Libro does its own seating; the live adapter never calls it and never returns `arrangement="merged"`. Do not cite the demo as evidence about YEN's dining room. |
+| French-Canadian speech accuracy | ❌ Unvalidated. Chosen on reputation. `sonic-3` speaks European French. |
+| Latency under real phone conditions | ⚠️ **Measured, and over budget.** 1.16–1.48s to first token against 200–700ms. |
+| **The greeting-abandonment fix** | ❌ Unvalidated. We shortened the greeting on a theory about length and language; 19% zero-turn hangups is the number to beat and we have no A/B. |
+| **Deployed and answering the phone** | ❌ Not yet. It works on a real call; it is not live. |
 
 ---
 
 ## Where this stack is weakest (say this before they find it)
 
 1. **We're on a reverse-engineered private API.** Libro's official partner route never responded, so we integrate against the dashboard's own undocumented API. It can change without notice. Mitigated by isolating it behind one adapter, but it's the biggest business risk.
-2. **French-Canadian speech accuracy is unvalidated.** We chose the STT on reputation, not local evidence.
-3. **No conversation-level tests yet.** 83 tests prove the *logic*; nothing yet proves the *conversation*. The SDK ships the tooling; we haven't used it.
-4. **Soft dependency on LiveKit Cloud** for the best turn detection.
-5. **Cost honesty:** at this venue's real volume (~91 talk-minutes/month), infrastructure is ~$10/month, but fully loaded with maintenance it's roughly at parity with buying a SaaS product. **The justification is control and data ownership, not savings** — claiming otherwise is easy to pick apart.
+2. **French-Canadian speech accuracy is unvalidated.** We chose the STT on reputation, not local evidence, and the TTS voice is European French.
+3. **No conversation-level tests.** 231 tests prove the *logic*; nothing proves the *conversation*. The SDK ships the tooling; we haven't used it. `docs/QA_SCRIPT.md` is the manual stand-in and has not been fully worked through.
+4. **Soft dependency on LiveKit Cloud** — hosted turn detection and the Cartesia voice both route through it. Without LiveKit credentials the agent falls back to VAD turn-taking and Deepgram's English voice.
+5. **Latency is over budget** — 1.16–1.48s to first token — and prompt caching isn't firing. Both measured, neither fixed.
+6. **Cost honesty:** verified recurring cost is **~$20 CAD/month** against the incumbent's **~$275 CAD/month**. That is a real saving, but it excludes maintenance, which is currently unpriced because it's being done for free. **The durable justification is control and data ownership** — the restaurant owns the prompts, the logic, and the call records. Lead with that, and let the cost number support it rather than carry it.

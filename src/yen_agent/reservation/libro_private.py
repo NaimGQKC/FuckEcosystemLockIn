@@ -204,7 +204,23 @@ def _get(d: dict, *keys, default=None):
 #: the process dies before anyone reads the terminal the record still exists.
 LIVE_BOOKINGS_LOG = "LIVE_BOOKINGS_TO_DELETE.txt"
 
+#: The only host where a booking is real. Anything else is the mock.
+LIBRO_HOST = "api.libroreserve.com"
+
 DASHBOARD_URL = "https://dashboard.libroreserve.com/restaurants/{rid}/reservations"
+
+
+def _reaches_libro(client: httpx.AsyncClient) -> bool:
+    """True only if a write on this client would actually land on YEN's floor.
+
+    Two things have to hold. The host must be Libro's — this adapter is also
+    pointed at the local mock. And the transport must be a real one: the test
+    suite keeps the real base URL and swaps in a ``MockTransport``, so the URL
+    on its own is not proof that anything left the machine.
+    """
+    if LIBRO_HOST not in str(client.base_url):
+        return False
+    return not isinstance(getattr(client, "_transport", None), httpx.MockTransport)
 
 
 def _announce_live_booking(booking, restaurant_id: str) -> None:
@@ -245,7 +261,7 @@ class LibroPrivateReservationService(ReservationService):
         token: str,
         email: str,
         restaurant_id: str,
-        base_url: str = "https://api.libroreserve.com",
+        base_url: str = f"https://{LIBRO_HOST}",
         timeout: float | httpx.Timeout | None = None,
     ):
         if not token or not email:
@@ -254,6 +270,9 @@ class LibroPrivateReservationService(ReservationService):
                 "libro-private backend."
             )
         self._restaurant_id = str(restaurant_id)
+        #: Has any request on this adapter actually reached Libro? Gates the
+        #: live-booking alarm — see `_reaches_libro`.
+        self._touched_libro = False
         # Two timeout profiles, because a read and a write have different costs
         # of failure on a live call. See the constants above for the reasoning.
         if timeout is None:
@@ -335,6 +354,13 @@ class LibroPrivateReservationService(ReservationService):
         attempts = GET_MAX_ATTEMPTS if is_get else 1
         timeout = self._read_timeout if is_get else self._write_timeout
         started = _time.monotonic()
+
+        # Set here, and nowhere else, because dispatching through a real
+        # transport at Libro's host is the only thing that proves we can touch
+        # the restaurant's floor. Tests either patch this method out or swap in
+        # a MockTransport, so neither ever trips the alarm below.
+        if _reaches_libro(self._client):
+            self._touched_libro = True
 
         last: BackendUnavailableError | None = None
         for attempt in range(1, attempts + 1):
@@ -561,7 +587,10 @@ class LibroPrivateReservationService(ReservationService):
         }}
         body = await self._request("POST", "/bookings", json=payload)
         booking = self._parse_booking(body)
-        _announce_live_booking(booking, self._restaurant_id)
+        # An alarm that goes off during `pytest` is an alarm everyone learns to
+        # scroll past, which defeats the point of having one.
+        if self._touched_libro:
+            _announce_live_booking(booking, self._restaurant_id)
         return booking
 
     async def get_booking(self, booking_id: str) -> Booking:

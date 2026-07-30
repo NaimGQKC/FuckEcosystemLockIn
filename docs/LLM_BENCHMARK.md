@@ -1,5 +1,19 @@
 # The 3.55s first token: a benchmark harness, and what we can prove without it
 
+> **Historical record. We ship Gemini 2.5 Flash, not Groq.** This document argues
+> for keeping `llama-3.3-70b-versatile` and moving to a paid Groq plan. That
+> question was overtaken: Gemini is cheaper at this venue's volume and usable
+> without the paid tier the Groq argument depended on.
+>
+> The *findings* below still stand and are worth keeping — the binding free-tier
+> limit is tokens rather than requests, and downgrading to an 8B model makes
+> throttling worse because it has half the TPM. The *recommendation* is dead.
+> `scripts/benchmark_llm.py` still runs and still targets Groq; it is the harness
+> that produced this record, not current configuration.
+>
+> Current measured latency, on Gemini, on real calls: **1.16–1.48s TTFT** against
+> a 200–700ms budget. Still over. Still unfixed.
+
 **Status: the benchmark has NOT been run. There are no API keys in this environment.**
 
 There are no measured TTFT numbers in this document, because inventing them would be

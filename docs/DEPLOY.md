@@ -12,7 +12,7 @@ Order matters: LiveKit before Twilio (Twilio needs LiveKit's SIP address).
 | | Why it exists | Ongoing work |
 |---|---|---|
 | **LiveKit** (free Build tier) | Carries the audio and bridges the phone call | None |
-| **Fly.io** (~$6/mo) | Runs our agent process, always on | None once deployed |
+| **Fly.io** (~$9.80 CAD/mo) | Runs our agent process, always on | None once deployed |
 | **Twilio** (~$2/mo) | Owns the Montreal phone number | None after setup |
 | **Supabase** (free) | Stores the call log so you can check what happened | Nothing, but see the pause trap |
 | **Google AI** | The LLM | None |
@@ -21,7 +21,12 @@ Order matters: LiveKit before Twilio (Twilio needs LiveKit's SIP address).
 
 We do **not** pay LiveKit's $50 Ship tier. That tier exists to stop agents
 cold-starting, and self-hosting the worker on Fly solves the same problem for
-~$6. See `docs/HOSTING_DECISION.md`.
+under $10. See `docs/HOSTING_DECISION.md`.
+
+> ⚠️ **This file is a checklist, not a walkthrough.** It tells you which accounts
+> you need and in what order, but it does not tell you what each screen says or
+> where to click. `docs/SETUP.md` is the model to follow. Rewriting this
+> click-by-click is an open task.
 
 ---
 

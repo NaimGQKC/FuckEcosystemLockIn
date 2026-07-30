@@ -11,14 +11,13 @@ from __future__ import annotations
 import datetime as dt
 import logging
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 from . import datetime_resolve, faq
 from .notify import Notifier
 from .phone import normalize_phone, spoken_phone
 from .store import CallStore
 from .reservation import (
-    Availability,
     Booking,
     ModificationRestrictedError,
     ReservationError,

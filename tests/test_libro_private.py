@@ -229,3 +229,55 @@ def test_build_service_private_without_token_errors():
                  libro_private_email="")
     with pytest.raises(ValueError):
         build_service(s)
+
+
+# ---------------------------------------------------------------------------
+# The live-booking alarm
+# ---------------------------------------------------------------------------
+# LIVE_BOOKINGS_TO_DELETE.txt is the only thing standing between a test booking
+# and a table YEN's staff cannot sell. It used to fire on every `pytest` run,
+# which is worse than not having it: three mock rows in that file taught us to
+# scroll past exactly the warning we built it to notice.
+
+
+def test_alarm_is_quiet_for_the_mock_and_for_fake_transports():
+    """Only a real dispatch at Libro's host counts as touching the floor."""
+    import httpx
+    from yen_agent.reservation.libro_private import _reaches_libro
+
+    async def _handler(request):  # pragma: no cover - never dispatched
+        return httpx.Response(200, json={})
+
+    # The mock backend: right transport, wrong host.
+    assert not _reaches_libro(httpx.AsyncClient(base_url="http://127.0.0.1:8000"))
+    # The resilience tests: right host, but nothing leaves the machine.
+    assert not _reaches_libro(httpx.AsyncClient(
+        base_url="https://api.libroreserve.com",
+        transport=httpx.MockTransport(_handler)))
+    # The real thing, and only the real thing.
+    assert _reaches_libro(httpx.AsyncClient(base_url="https://api.libroreserve.com"))
+
+
+async def test_a_mocked_booking_never_arms_the_alarm(monkeypatch):
+    """A booking made with `_request` patched out did not happen at Libro."""
+    svc = _svc()
+
+    async def fake(method, path, *, json=None, params=None, accept=None):
+        if path == "/people/query":
+            return {"data": [{"id": "P1", "type": "people"}]}
+        if path == "/services":
+            return {"data": [{"id": "S1", "type": "services",
+                              "attributes": {"status": "opened",
+                                             "started-at": "2026-09-08T15:30:00Z"}}]}
+        if path == "/bookings" and method == "POST":
+            return {"data": {"type": "bookings", "id": "B1",
+                             "attributes": {"slots": 2, "status": "approved"},
+                             "relationships": {"person": {"data": {"id": "P1"}},
+                                               "service": {"data": {"id": "S1"}}}}}
+        return {}
+
+    monkeypatch.setattr(svc, "_request", fake)
+    await svc.create_booking(time="2026-09-08T11:30:00-04:00", party_size=2,
+                             first_name="ZZ", phone="+15145550199")
+    assert svc._touched_libro is False
+    await svc.aclose()

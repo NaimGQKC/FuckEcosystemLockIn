@@ -1,24 +1,27 @@
-# YEN Cuisine Japonaise — bilingual voice AI phone agent (POC)
+# YEN Cuisine Japonaise — bilingual voice AI phone agent
 
-A low-cost, fast-to-ship voice agent that answers the phone for **YEN Cuisine
-Japonaise** (2157 Rue Mackay, downtown Montreal) and handles reservations —
-check availability, book, look up, reschedule, cancel, answer FAQs, and take
-messages — in **English first, French via one config switch**.
+A low-cost voice agent that answers the phone for **YEN Cuisine Japonaise**
+(2157 Rue Mackay, downtown Montreal) and handles reservations — check
+availability, book, look up, reschedule, cancel, answer FAQs, take messages and
+takeout callbacks. It **greets in French** and follows the caller into English
+if that's what they speak, switching mid-call if they do.
 
-It doesn't just read a calendar: it reasons about the actual **floor plan** —
-picking the right table, **combining tables** for larger parties, respecting how
-long a table is held, and **escalating oversized parties to staff** — by calling
-a deterministic seating engine rather than guessing.
+It books into the restaurant's **real Libro account**, which they already own.
+The restaurant keeps the prompts, the logic, and the call records — that is the
+point of the project, not a side effect.
+
+**Status.** A spoken call has booked a real table on YEN's floor (far-future
+dated, cancelled in the same session). It is **not yet deployed** — there is no
+phone number pointed at it. See [Phased plan](#phased-plan).
 
 > **For the developer:** hand the owner
 > [`docs/YEN_owner_questions.xlsx`](docs/YEN_owner_questions.xlsx) — it collects the
-> real hours, tables, and policies (with sensible defaults) needed to make the
-> agent exact. Everything runs on realistic placeholders until then.
+> remaining policy questions. Hours are confirmed from the venue's live Libro
+> configuration; the rest still runs on realistic placeholders.
 
-This repository is **Phase 1**: a $0, web-testable agent built on
-[LiveKit Agents](https://docs.livekit.io/agents/), wired to a **mock Libro
-reservation API** so the whole thing runs end-to-end with no Libro credentials
-and no phone number. Going live later is mostly configuration, not a rewrite.
+Built on [LiveKit Agents](https://docs.livekit.io/agents/). A **mock Libro API**
+ships alongside, so the whole thing runs end-to-end with no Libro credentials and
+no phone number — that is what the test suite and `console` mode use.
 
 ## The one idea that makes this cheap and safe
 
@@ -29,7 +32,10 @@ Every reservation tool depends only on the `ReservationService` abstraction
 |---|---|---|
 | `MockReservationService` | local FastAPI + SQLite (`mock_libro/`) | POC, demos, tests |
 | `LibroPrivateReservationService` | **real YEN reservations** via the Libro dashboard API (token auth) | production ([guide](docs/LIBRO_PRIVATE_INTEGRATION.md)) |
-| `LibroReservationService` | Libro partner OAuth API | unused (partner route didn't respond) |
+
+(A third implementation against Libro's official **partner** OAuth API was
+deleted — that route never responded to us, and a stub nobody can exercise is
+just something for the next session to trip over.)
 
 **Swapping mock → real is a config change** (`YEN_RESERVATION_BACKEND=libro-private`).
 The agent and its tools never import HTTP or Libro specifics — each backend keeps
@@ -59,7 +65,7 @@ covered without any cloud services or the heavy agent runtime:
 
 ```bash
 pip install -e ".[dev]"
-pytest -q          # 59 tests: floor plan, mock JSON:API, service round-trips, dates, phones, concierge
+pytest -q          # 231 tests: mock JSON:API, service round-trips, dates, phones, concierge, resilience
 ```
 
 ### 2. Run the mock Libro server (optional — tests use it in-process)
@@ -75,9 +81,13 @@ curl "http://localhost:8000/restricted/restaurant/seatings?date=2026-07-20&size=
 python scripts/demo.py
 ```
 
-This drives the agent's brain through a real script — books a 2-top, combines
-tables for a party of 8, refuses a second party of 8 when the room is full, and
-escalates a party of 14 to staff — printing exactly what it would say.
+This drives the agent's brain through a real script, printing exactly what it
+would say.
+
+> ⚠️ The demo runs against `mock_libro/floorplan.py`, an **invented** floor plan.
+> Table combining and "the room is full" are properties of that mock, **not of
+> YEN's real dining room** — real Libro does its own seating and the live adapter
+> never returns a merged table. Don't cite the demo as evidence about the venue.
 
 ### 4. Run the actual voice agent
 
@@ -101,7 +111,7 @@ a phone number for the first test; all have free tiers.
 | # | Account | Free tier | What you copy into `.env` |
 |---|---|---|---|
 | 1 | [LiveKit Cloud](https://cloud.livekit.io) | Build tier, no card | `LIVEKIT_URL`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET` |
-| 2 | [Deepgram](https://console.deepgram.com) | $200 credit, no card | `DEEPGRAM_API_KEY` (used for both STT and TTS) |
+| 2 | [Deepgram](https://console.deepgram.com) | $200 credit, no card | `DEEPGRAM_API_KEY` (STT; also the fallback voice in `console` mode) |
 | 3 | [Google AI Studio](https://aistudio.google.com/apikey) (Gemini) | free tier | `GOOGLE_API_KEY` |
 
 (Prefer OpenAI for the LLM? set `YEN_LLM_PROVIDER=openai` and `OPENAI_API_KEY` instead.)
@@ -138,35 +148,41 @@ a phone number for the first test; all have free tiers.
    dispatch rule at the agent. No agent code changes — a phone caller is just
    another participant. (Costs ~$1/mo for the number + per-minute usage.)
 
-**Enable French** any time: set `YEN_LANGUAGE_MODE=multi`. Deepgram handles both
-STT and TTS on one key — deliberately a single vendor, so there is one less key to
-expire on a system meant to run unattended.
+**The French voice needs LiveKit credentials.** It routes through LiveKit
+Inference (`cartesia/sonic-3`, `language="fr"`), which bills on the LiveKit keys
+above — there is deliberately **no separate Cartesia account or key**. Without
+LiveKit credentials the agent falls back to Deepgram's English voice and logs a
+loud warning, because French read by an English voice is something you want to
+find in a log line rather than on a live call.
 
-> **Model-name note:** the plugin model ids in `src/yen_agent/agent.py`
-> (Nova-3, `aura-2-thalia-en`, and the configured LLM) are the
+> **Model-name note:** the plugin model ids in `src/yen_agent/agent.py` are the
 > recommended stack; if a plugin version rejects one, check the provider's
-> current model list and adjust that one line.
+> current model list and adjust that one line. Model ids are checked against the
+> plugin's own type literals — we shipped an invented one (`cartesia/sonic-3:fr`)
+> once, and it would have crashed a live call.
 
-## Recommended low-cost stack
+## The stack
 
-English-first MVP, each layer swappable via `.env`:
+French-first, each layer swappable via `.env`. Reasoning in
+[`docs/ARCHITECTURE_DECISIONS.md`](docs/ARCHITECTURE_DECISIONS.md).
 
 | Layer | Choice | Notes |
 |---|---|---|
-| Framework | LiveKit Agents (Apache-2.0) | self-host worker = $0 |
-| STT | Deepgram Nova-3 (`en`) | `multi` enables FR/EN code-switching |
-| LLM | Groq (open-weight, swappable) | see `docs/ARCHITECTURE_DECISIONS.md` |
-| TTS | Deepgram Aura-2 | same key as STT — one vendor, one bill |
-| Telephony (Phase 2) | Twilio Canadian local number → LiveKit SIP | LiveKit phone numbers are US-only |
+| Framework | LiveKit Agents (Apache-2.0) | self-host worker; warm, so no cold start on an inbound call |
+| STT | Deepgram Nova-3, `language="multi"` | FR/EN code-switching mid-sentence |
+| LLM | Google Gemini 2.5 Flash | swappable — 10 providers wired in `agent.py` |
+| TTS | Cartesia `sonic-3` (`fr`) via LiveKit Inference | no separate account or key |
+| Telephony | Twilio Canadian local number → LiveKit SIP | LiveKit's own numbers are US-only |
+| Hosting | Fly.io `yyz` (Toronto) | Law 25 residency + latency to Montreal |
+| Call log | SQLite (WAL) local, Supabase `ca-central-1` in production | dashboard reads it live without blocking a call |
 
-### Enabling French (auto-detected, including Québec French)
+### Language
 
-```dotenv
-YEN_LANGUAGE_MODE=multi      # Nova-3 Multilingual STT + French greeting/locale
-```
-
-No architecture change — the agent detects the caller's language from their first
-words and responds in kind, and can switch mid-call.
+`YEN_LANGUAGE_MODE=multi` (the default) gives Nova-3 Multilingual STT and the
+French locale. The greeting is **always French** — *"Bonjour. YEN Cuisine
+Japonaise."* — because two-thirds of this venue's calls are in French. From the
+caller's first words the agent follows whichever language they use, and can
+switch mid-call.
 
 **What auto-detection actually covers.** Deepgram Nova-3's real-time
 code-switching supports exactly **10 languages**: English, Spanish, French,
@@ -230,8 +246,13 @@ The things that break voice agents in practice are handled deterministically
 ## Phased plan
 
 - **Phase 1 (this repo):** free, web-tested agent against the mock. ✅
-- **Phase 2:** buy a Twilio CA number, bridge via LiveKit SIP, test a real call.
-- **Phase 3 — real reservations:** set `YEN_RESERVATION_BACKEND=libro-private`
+- **Phase 2 — real reservations:** ✅ done. A spoken call booked a real table on
+  YEN's floor, far-future dated and cancelled in the same session.
+- **Phase 3 — telephony and deployment:** buy a Twilio CA number, bridge via
+  LiveKit SIP, deploy to Fly. **Not done.** Blocked on accounts, and on enabling
+  billing for Gemini — the free tier rate-limited the first live test.
+
+  To point at the real backend, set `YEN_RESERVATION_BACKEND=libro-private`
   with the YEN Libro token. First run the **read-only probe** to confirm the live
   API shapes, then a single controlled test booking. Full walkthrough:
   [`docs/LIBRO_PRIVATE_INTEGRATION.md`](docs/LIBRO_PRIVATE_INTEGRATION.md).
@@ -240,27 +261,26 @@ The things that break voice agents in practice are handled deterministically
   python scripts/probe_libro_private.py --date 2026-08-15 --party 2   # safe, read-only
   ```
 
-  The official Libro **partner** API (`LibroReservationService`) is stubbed but
-  unused — that route didn't respond — so production goes through the dashboard
-  API adapter instead.
+  Production goes through the dashboard API adapter. Libro's official **partner**
+  API was never an option — that route didn't respond to us.
 
-## Cost: an honest note
+## Cost
 
-The detailed pricing in the project brief is a useful **2026 estimate**, but LLM
-/ STT / TTS list prices change frequently — **re-verify before committing.**
-Rough shape:
+**~$20 CAD/month**, against the incumbent's ~$275 CAD/month. Line items live in
+`scripts/build_client_report.py`, which generates the PDF the owner was quoted
+from — **that script is the source of truth**, not the prose here.
 
-- **Phase 1 (this repo): $0.** No phone number, free LiveKit Build tier + provider
-  free credits, worker on your laptop.
-- **First live month:** largely absorbed by free credits — likely **single/low
-  double digits out of pocket** (mostly the ~$1/mo Twilio number).
-- **Sustained phone traffic (~1,500–2,000 min/mo):** realistically **~$80–$130/mo**
-  once free credits are exhausted — **higher than the ~$60 one-time figure** in the
-  brief. The $60 comfortably covers the POC plus the first live month; ongoing
-  service needs a recurring budget. **Flag this to the owner up front.**
+The figure rests on this venue's *measured* volume: **102 calls and 111
+talk-minutes per month**, summed from an 84-call log. Most of the total is fixed
+cost (hosting ~$9.80, phone number ~$1.15 + minutes), so it barely moves as calls
+increase. Earlier versions of this file estimated 1,500–2,000 min/month and
+$80–130 — that was an order of magnitude off the real venue.
 
-TTS is the largest and most variable cost (it scales with how much the agent
-*speaks*), so the agent is written to keep responses short.
+Two things the number does not include: **maintenance**, currently unpriced
+because it's being done for free, and a **$160 CAD one-time** tooling cost
+already incurred. Deeper analysis in [`docs/COST.md`](docs/COST.md) (method and
+volume) and [`docs/STACK_DECISION.md`](docs/STACK_DECISION.md) (rates verified
+against primary sources).
 
 ## Project layout
 
@@ -277,16 +297,18 @@ src/yen_agent/
     jsonapi.py         #   shared httpx JSON:API client
     mock.py            #   MockReservationService (in-process or http)
     libro_private.py   #   LibroPrivateReservationService — REAL YEN (token auth)
-    libro.py           #   LibroReservationService (partner OAuth) — unused
   concierge.py         # reservation orchestration + spoken responses (no LiveKit)
   datetime_resolve.py  # deterministic natural-language date parsing
   phone.py             # phone-number normalization to E.164
   tools.py             # LiveKit @function_tool wrappers
   agent.py             # AgentSession wiring + entrypoint (prewarm, metrics)
   prompts.py / faq.py  # system prompt + Yen FAQ knowledge base
+  store.py             # durable call log: calls, messages, tool traces, outcomes
+  dashboard.py         # read-only FastAPI HTML view over that log
+  notify.py            # staff alerts (SMS / email) for messages and failures
   config.py            # env-driven settings
-scripts/demo.py        # text-mode walkthrough of the reservation reasoning
-tests/                 # 93 tests, run with no cloud services and no API keys
+scripts/               # demo, setup check, call log CLI, Libro probes, client report
+tests/                 # 231 tests, run with no cloud services and no API keys
 docs/YEN_owner_questions.xlsx  # questions for the restaurant owner (hand this off)
 ```
 

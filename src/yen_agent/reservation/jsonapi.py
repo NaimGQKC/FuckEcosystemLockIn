@@ -2,9 +2,13 @@
 
 This holds *all* of the Libro wire-format knowledge: building JSON:API request
 envelopes, parsing ``data``/``attributes``/``relationships`` responses, and
-turning structured error bodies into typed exceptions. ``MockReservationService``
-and ``LibroReservationService`` differ only in base URL and auth, so the agent's
-tools are identical against the mock and against real Libro.
+turning structured error bodies into typed exceptions. This is what
+``MockReservationService`` is built on, so the agent's tools behave identically
+against the mock and against real Libro.
+
+Note that ``LibroPrivateReservationService`` does **not** use this client: the
+private dashboard API turned out to need per-endpoint ``Accept`` versioning and
+its own auth header, so it keeps its wire details in its own file.
 """
 
 from __future__ import annotations

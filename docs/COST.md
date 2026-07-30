@@ -1,5 +1,26 @@
 # What this costs, and what it costs to *manage*
 
+> ## ⚠️ The current answer, before you read any further
+>
+> | | |
+> |---|---|
+> | **Recurring** | **~$20 CAD/month** ($17.20 + 15% contingency) |
+> | **One-time** | **$160 CAD** (one month of Claude Max, incl. taxes) |
+> | **Incumbent** | ~$275 CAD/month |
+> | Development time | **not charged** |
+>
+> The line items live in `scripts/build_client_report.py`, which generates the
+> PDF sent to the owner. **That script is the source of truth** — it is the
+> number the client has actually been quoted.
+>
+> **Two corrections this document does not reflect:**
+> 1. **Hosting is ~$9.80 CAD/month, not $4.40.** Fly bills CPU at a flat
+>    $0.87/month and RAM at **$6.24/month per GB**, and `fly.toml` asks for 1GB
+>    (= $7.11 USD). The earlier figure was the 512MB price.
+> 2. The rates below were superseded twice — first by `STACK_DECISION.md`, then
+>    by the report. Read this file for the **volume analysis and the method**,
+>    which still stand, not for the dollar figures.
+
 Recomputed from the venue's real call log, with published vendor rates. The
 owner's constraint drives the design: **"I just want to manage the connection to
 Libro. Nothing else. And it should work properly enough."**

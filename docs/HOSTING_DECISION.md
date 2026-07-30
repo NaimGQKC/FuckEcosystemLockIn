@@ -509,8 +509,12 @@ a hung worker is never noticed.
 ## 6.3 Accounts and secrets (set once)
 
 `LIVEKIT_URL`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET`, `DEEPGRAM_API_KEY`,
-`CARTESIA_API_KEY`, `GOOGLE_API_KEY`, Supabase URL + service key, Libro
-credentials. Set via `fly secrets set`. Then:
+`GOOGLE_API_KEY`, Supabase URL + service key, Libro credentials. Set via
+`fly secrets set`.
+
+There is **no `CARTESIA_API_KEY`** — the voice bills through LiveKit Inference on
+the LiveKit credentials above. That is the entire reason Cartesia was chosen over
+a provider needing its own account. Then:
 
 - Enable **Deepgram credit auto-load** — otherwise credits run out and STT stops.
 - Put **all** cards on the same payment method with a long expiry, and set a

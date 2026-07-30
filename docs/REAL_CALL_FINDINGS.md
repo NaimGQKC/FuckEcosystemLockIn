@@ -51,11 +51,21 @@ automated system due to cancellation restrictions."
 **We already have cancellation.** This is a real, free differentiator; there is
 now a regression test proving it completes without a human.
 
-### 3. Party size: our limit was wrong
+### 3. Party size: I changed it to 7, then had to change it back
 
 The venue's own rule is *"accept the reservation if party size is ≤ 7; if
 strictly greater than 7, transfer."* Our Libro adapter had `MAX_ONLINE_PARTY = 6`,
-which would have wrongly escalated every party of 7. **Corrected to 7.**
+so I raised it to 7 to match.
+
+**That was wrong, and a later probe of the Libro API proved it.** The
+availability endpoint only ever exposes party sizes **1–6** — Libro cannot
+express a party of seven at all, so a booking for 7 is not something the
+incumbent's prompt could deliver either, whatever it claimed. **Reverted to 6**
+(`MAX_ONLINE_PARTY` in `libro_private.py` and `faq.py`), and 7+ escalates.
+
+The lesson is worth more than the constant: **the incumbent's prompt is
+aspirational, the API is truth.** Don't take a competitor's system prompt as
+evidence of a capability.
 
 ### 4. Hours: confirmed, no longer a guess
 
