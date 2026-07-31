@@ -37,3 +37,6 @@ libro_booking_truth.json
 .vscode/
 .DS_Store
 LIVE_BOOKINGS_TO_DELETE.txt
+
+# Generated invoices — regenerate with `python invoices/build_invoice.py`.
+invoices/*.pdf
