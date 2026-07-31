@@ -10,9 +10,11 @@ It books into the restaurant's **real Libro account**, which they already own.
 The restaurant keeps the prompts, the logic, and the call records — that is the
 point of the project, not a side effect.
 
-**Status.** A spoken call has booked a real table on YEN's floor (far-future
-dated, cancelled in the same session). It is **not yet deployed** — there is no
-phone number pointed at it. See [Phased plan](#phased-plan).
+**Status.** It books real tables on YEN's floor in text mode (verified, then
+cancelled), and it holds a spoken conversation and calls the right tools with the
+right arguments. Those two halves **have not yet been joined** — nobody has
+spoken to it while it wrote to real Libro — and it is **not deployed**: no phone
+number points at it. See [Phased plan](#phased-plan).
 
 > **For the developer:** hand the owner
 > [`docs/YEN_owner_questions.xlsx`](docs/YEN_owner_questions.xlsx) — it collects the
@@ -246,8 +248,11 @@ The things that break voice agents in practice are handled deterministically
 ## Phased plan
 
 - **Phase 1 (this repo):** free, web-tested agent against the mock. ✅
-- **Phase 2 — real reservations:** ✅ done. A spoken call booked a real table on
-  YEN's floor, far-future dated and cancelled in the same session.
+- **Phase 2 — real reservations:** ✅ **in text mode.** Booking `111634069` was
+  created on `api.libroreserve.com` via `scripts/test_booking_libro.py`, dated
+  far into the future, then cancelled and verified. **Nobody has yet *spoken* to
+  the agent while it wrote to real Libro** — that is `docs/QA_SCRIPT.md` §F and
+  it has not been run.
 - **Phase 3 — telephony and deployment:** buy a Twilio CA number, bridge via
   LiveKit SIP, deploy to Fly. **Not done.** Blocked on accounts, and on enabling
   billing for Gemini — the free tier rate-limited the first live test.

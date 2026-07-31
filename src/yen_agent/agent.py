@@ -172,13 +172,14 @@ def _build_llm(settings: Settings):
 
     Provider options:
 
-      groq     default. Fast hardware; OpenAI-compatible. Use a PAID plan.
+      google   DEFAULT (gemini-2.5-flash). NOTE: the free tier is thin and has
+               already rate-limited a live voice test — enable billing before
+               this goes on a real line.
+      groq     fast hardware; OpenAI-compatible. Use a PAID plan — see above.
       cerebras high daily token volume.
       xai      xAI's Grok.
       openai   pay-as-you-go, no daily cap.
       livekit  routed through LiveKit Inference on your existing LiveKit key.
-      google   free tier is ~20 requests per DAY — one conversation exhausts it
-               and every later turn dies with 429. Development only.
     """
     provider = (settings.llm_provider or "google").lower()
     model = settings.llm_model
