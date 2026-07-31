@@ -20,10 +20,16 @@ from reportlab.platypus import (
 HERE = "/home/user/FuckEcosystemLockIn/invoices"
 
 # --------------------------------------------------------------- who ------
-# ⚠️ REPLACE "[YOUR FULL NAME]" WITH YOUR LEGAL NAME.
+# A supplier name is not optional: without one the client cannot use this as a
+# supporting document for the expense. It does NOT have to be a personal name —
+# but a trade name only belongs here if it is registered. In Quebec a sole
+# proprietor operating under their own given name + surname is exempt from
+# registering with the Registraire des entreprises; any other business name is
+# not. So "Alejandro Monge" is always safe, and "The Compass Labs" is correct
+# only if that entity is actually registered or incorporated.
 SENDER = {
-    "name": "[YOUR FULL NAME]",
-    "lines": ["Montreal, QC", "a.naim2004@gmail.com"],
+    "name": "Alejandro Monge",
+    "lines": ["Montreal, QC", "alex@thecompasslabs.com"],
 }
 
 CLIENT = {
