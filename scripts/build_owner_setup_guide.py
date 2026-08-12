@@ -259,7 +259,7 @@ A(account(
         "Open <b>Billing</b> and add the restaurant credit card. Fly will not "
         "run anything until a card is on file.",
         "Go to your organisation, then <b>Members</b>, then <b>Invite</b>.",
-        "Invite <b>alex@thecompasslabs.com</b>. That lets me deploy and fix the "
+        "Invite <b>a.naim2004@gmail.com</b>. That lets me deploy and fix the "
         "assistant. <b>You can remove me with one click, at any time.</b>",
     ],
     "This is the one real bill. It is a computer that never sleeps, because a "
@@ -350,7 +350,7 @@ A(KeepTogether([
     [P("From", "cellb"), P("What to send", "cellb")],
     [P("LiveKit", "cell"), P("URL, API Key, API Secret", "cell")],
     [P("Fly.io", "cell"),
-     P("Nothing &mdash; just invite alex@thecompasslabs.com as a member", "cell")],
+     P("Nothing &mdash; just invite a.naim2004@gmail.com as a member", "cell")],
     [P("Twilio", "cell"), P("Account SID, Auth Token, and the new 514 number", "cell")],
     [P("Google AI", "cell"), P("The API key", "cell")],
     [P("Deepgram", "cell"), P("The API key", "cell")],
@@ -401,7 +401,7 @@ A(P("Each of these companies emails you directly if a payment fails, so you "
     "these screens change often.", "p"))
 
 A(Spacer(1, 10))
-A(P("Alejandro Monge &mdash; alex@thecompasslabs.com", "small"))
+A(P("Alejandro Monge &mdash; a.naim2004@gmail.com", "small"))
 
 SimpleDocTemplate(
     OUT, pagesize=LETTER,

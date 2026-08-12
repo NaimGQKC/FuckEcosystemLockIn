@@ -4,8 +4,9 @@
 
 Add a new dict to INVOICES and re-run. Numbering is YEN-<year>-<seq>.
 
-⚠️ FILL IN `SENDER` BELOW before sending anything. It ships with a placeholder
-name, because an invoice without a real legal name on it is not an invoice.
+`SENDER` and `CLIENT` below are the two parties. Keep the contact address in
+step with the owner setup guide (scripts/build_owner_setup_guide.py) — the
+client sees both documents, and two different addresses invites a bounced reply.
 """
 
 from reportlab.lib import colors
@@ -29,7 +30,7 @@ HERE = "/home/user/FuckEcosystemLockIn/invoices"
 # only if that entity is actually registered or incorporated.
 SENDER = {
     "name": "Alejandro Monge",
-    "lines": ["Montreal, QC", "alex@thecompasslabs.com"],
+    "lines": ["Montreal, QC", "a.naim2004@gmail.com"],
 }
 
 CLIENT = {
